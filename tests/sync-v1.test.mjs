@@ -18,13 +18,17 @@ test("loads the cloud sync layer before WordLoop", async () => {
     readFile(new URL("index.html", root), "utf8"),
     readFile(new URL("sync-v1.js", root), "utf8"),
   ]);
-  assert.match(html, /sync-v1\.js[\s\S]+index-DiX3UPkj\.js/);
+  assert.match(html, /sync-v1\.js/);
+  assert.doesNotMatch(html, /<script[^>]+index-DiX3UPkj\.js/);
+  assert.match(sync, /import\("\.\/assets\/index-DiX3UPkj\.js"\)/);
   assert.match(sync, /wordloop-personal-v6/);
   assert.match(sync, /cloud-sync-v1/);
   assert.match(sync, /migration_/);
   assert.match(sync, /未连接云端 · 点此连接/);
   assert.match(sync, /离线保存 · 联网后同步/);
   assert.match(sync, /连接云同步/);
+  assert.match(sync, /重新上传本机删除记录/);
+  assert.match(sync, /applyCloudSnapshotBeforeApp/);
   assert.match(sync, /导入旧版删除进度/);
   assert.match(sync, /datasetFingerprint/);
   assert.match(sync, /AES-GCM/);

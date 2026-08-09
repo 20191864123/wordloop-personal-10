@@ -199,6 +199,35 @@ async function connectCloudSync() {
   }
 }
 
+async function forceUploadLocalProgress() {
+  const [progress, savedMeta, savedKey] = await Promise.all([
+    readLocal(PROGRESS_KEY),
+    readLocal(SYNC_META_KEY),
+    readLocal(PERSONAL_KEY),
+  ]);
+  if (!savedKey && !keyFromFragment()) {
+    await connectCloudSync();
+    return;
+  }
+  const deletedWords = [
+    ...new Set((Array.isArray(progress?.deletedWords) ? progress.deletedWords : []).map(normalizeWord).filter(Boolean)),
+  ];
+  if (deletedWords.length === 0) {
+    window.alert("这台设备当前没有删除记录。请务必在仍保留删除记录的旧iPhone WordLoop里执行。");
+    return;
+  }
+  if (!window.confirm(`确定把这台设备的 ${deletedWords.length.toLocaleString()} 个删除记录重新上传到云端吗？`)) {
+    return;
+  }
+  const meta = observeLocalChanges(progress, await initializeMeta(progress, savedMeta));
+  meta.pending.push(...deletedWords.map((word) => createOperation(word, true)));
+  meta.lastObservedDeleted = [...deletedWords].sort();
+  await writeLocalEntries([[SYNC_META_KEY, meta]]);
+  failureCount = 0;
+  setStatus("syncing");
+  schedule(50);
+}
+
 async function importOldProgress(file) {
   const exported = JSON.parse(await file.text());
   if (!Array.isArray(exported?.words) || exported.words.length === 0) {
@@ -291,6 +320,19 @@ function renderCloudConnector() {
   else sheet.append(button);
 }
 
+function renderForceUploadButton() {
+  const sheet = document.querySelector(".action-sheet");
+  if (!sheet || sheet.querySelector(".force-upload-progress")) return;
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "force-upload-progress";
+  button.textContent = "重新上传本机删除记录";
+  button.addEventListener("click", forceUploadLocalProgress);
+  const importer = sheet.querySelector(".import-old-progress");
+  if (importer) importer.after(button);
+  else sheet.append(button);
+}
+
 function renderStatus() {
   const copyUpdates = [
     [".action-sheet p", "你的删除进度只保存在这台设备。建议每过完一个List就导出一次备份。", "删除记录、当前List和释义开关会加密同步；断网时仍保存在本机，联网后自动补传。"],
@@ -305,6 +347,7 @@ function renderStatus() {
   }
   renderProgressImporter();
   renderCloudConnector();
+  renderForceUploadButton();
 
   let indicator = document.querySelector(".cloud-sync-indicator");
   const brandCopy = document.querySelector(".header-brand > div:last-child");
@@ -496,6 +539,10 @@ async function runSync() {
     meta.lastObservedDeleted = [...mergedWords].sort();
     meta.cursor = cursor;
     meta.hasSyncedOnce = true;
+    if (wordsChanged) {
+      meta.applyOnNextLoad = true;
+      meta.appliedDeletedWords = [...mergedWords].sort();
+    }
     await writeLocalEntries([
       [PROGRESS_KEY, progress],
       [SYNC_META_KEY, meta],
@@ -514,7 +561,26 @@ async function runSync() {
   }
 }
 
-if (typeof window !== "undefined" && typeof indexedDB !== "undefined") {
+async function applyCloudSnapshotBeforeApp() {
+  const [progress, meta] = await Promise.all([readLocal(PROGRESS_KEY), readLocal(SYNC_META_KEY)]);
+  if (!progress || !meta?.applyOnNextLoad || !Array.isArray(meta.appliedDeletedWords)) return;
+  progress.deletedWords = [...new Set(meta.appliedDeletedWords.map(normalizeWord).filter(Boolean))].sort();
+  meta.lastObservedDeleted = [...progress.deletedWords];
+  meta.applyOnNextLoad = false;
+  delete meta.appliedDeletedWords;
+  await writeLocalEntries([
+    [PROGRESS_KEY, progress],
+    [SYNC_META_KEY, meta],
+  ]);
+}
+
+async function startBrowserApp() {
+  try {
+    await applyCloudSnapshotBeforeApp();
+  } catch (error) {
+    console.info("WordLoop启动前进度恢复失败，将继续使用本机数据。", error instanceof Error ? error.message : error);
+  }
+  await import("./assets/index-DiX3UPkj.js");
   const observer = new MutationObserver(renderStatus);
   observer.observe(document.documentElement, { childList: true, subtree: true });
   window.addEventListener("online", () => schedule(100));
@@ -524,6 +590,8 @@ if (typeof window !== "undefined" && typeof indexedDB !== "undefined") {
   });
   runSync();
 }
+
+if (typeof window !== "undefined" && typeof indexedDB !== "undefined") startBrowserApp();
 
 export {
   applyOperations,
