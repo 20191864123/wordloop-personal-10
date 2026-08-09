@@ -2,6 +2,7 @@ const DB_NAME = "wordloop-personal-v6";
 const STORE_NAME = "wordloop";
 const PROGRESS_KEY = "progress";
 const PERSONAL_KEY = "personal-key";
+const LIBRARY_KEY = "library";
 const SYNC_META_KEY = "cloud-sync-v1";
 const SYNC_API_URL = "https://wordloop-sync.wordloop-20191864123.workers.dev/v1/sync";
 const MAX_BATCH = 500;
@@ -168,6 +169,79 @@ function statusText(value) {
   }[value];
 }
 
+async function importOldProgress(file) {
+  const exported = JSON.parse(await file.text());
+  if (!Array.isArray(exported?.words) || exported.words.length === 0) {
+    throw new Error("这不是WordLoop导出的剩余词库JSON");
+  }
+  const [library, progress] = await Promise.all([readLocal(LIBRARY_KEY), readLocal(PROGRESS_KEY)]);
+  if (!Array.isArray(library?.words) || library.words.length === 0) {
+    throw new Error("请先用专属链接载入完整词库，再导入旧进度");
+  }
+  if (
+    exported.datasetFingerprint &&
+    library.datasetFingerprint &&
+    exported.datasetFingerprint !== library.datasetFingerprint
+  ) {
+    throw new Error("旧进度与当前词库版本不一致，请把JSON发给Codex核对");
+  }
+
+  const allWords = library.words.map((item) => normalizeWord(item.word)).filter(Boolean);
+  const allWordSet = new Set(allWords);
+  const remaining = new Set(exported.words.map((item) => normalizeWord(item?.word)).filter(Boolean));
+  const matched = [...remaining].filter((word) => allWordSet.has(word)).length;
+  if (matched < Math.min(remaining.size, Math.floor(remaining.size * 0.98))) {
+    throw new Error("旧文件中的单词与当前词库对不上，请不要强行导入");
+  }
+
+  const deletedWords = allWords.filter((word) => !remaining.has(word));
+  if (Number(exported.deletedCount) > 0 && deletedWords.length === 0) {
+    throw new Error("检测到旧文件有删除记录，但没有成功转换，请把文件发给Codex");
+  }
+  const nextProgress = {
+    ...(progress || {}),
+    fingerprint: library.datasetFingerprint,
+    deletedWords: [...new Set(deletedWords)].sort(),
+    activeList: Math.min(10, Math.max(1, Number(progress?.activeList) || 1)),
+    showMeaning: progress?.showMeaning !== false,
+  };
+  await writeLocalEntries([[PROGRESS_KEY, nextProgress]]);
+  return deletedWords.length;
+}
+
+function renderProgressImporter() {
+  const sheet = document.querySelector(".action-sheet");
+  if (!sheet || sheet.querySelector(".import-old-progress")) return;
+  const button = document.createElement("button");
+  const input = document.createElement("input");
+  button.type = "button";
+  button.className = "import-old-progress";
+  button.textContent = "导入旧版删除进度";
+  input.type = "file";
+  input.accept = "application/json,.json";
+  input.hidden = true;
+  button.addEventListener("click", () => input.click());
+  input.addEventListener("change", async () => {
+    const file = input.files?.[0];
+    input.value = "";
+    if (!file) return;
+    button.disabled = true;
+    button.textContent = "正在恢复旧进度…";
+    try {
+      const count = await importOldProgress(file);
+      window.alert(`已恢复 ${count.toLocaleString()} 个删除记录。`);
+      location.reload();
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "旧进度导入失败");
+      button.disabled = false;
+      button.textContent = "导入旧版删除进度";
+    }
+  });
+  const firstSecondaryButton = sheet.querySelector("button:not(.sheet-primary)");
+  if (firstSecondaryButton) firstSecondaryButton.before(button, input);
+  else sheet.append(button, input);
+}
+
 function renderStatus() {
   const copyUpdates = [
     [".action-sheet p", "你的删除进度只保存在这台设备。建议每过完一个List就导出一次备份。", "删除记录、当前List和释义开关会加密同步；断网时仍保存在本机，联网后自动补传。"],
@@ -180,6 +254,7 @@ function renderStatus() {
       if (element.textContent?.trim() === original) element.textContent = replacement;
     }
   }
+  renderProgressImporter();
 
   let indicator = document.querySelector(".cloud-sync-indicator");
   const brandCopy = document.querySelector(".header-brand > div:last-child");
@@ -401,5 +476,6 @@ export {
   decryptPayload,
   deriveCredentials,
   encryptPayload,
+  importOldProgress,
   normalizeWord,
 };

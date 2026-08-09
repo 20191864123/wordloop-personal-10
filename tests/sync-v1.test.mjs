@@ -22,6 +22,8 @@ test("loads the cloud sync layer before WordLoop", async () => {
   assert.match(sync, /cloud-sync-v1/);
   assert.match(sync, /migration_/);
   assert.match(sync, /离线保存 · 联网后同步/);
+  assert.match(sync, /导入旧版删除进度/);
+  assert.match(sync, /datasetFingerprint/);
   assert.match(sync, /AES-GCM/);
 });
 
