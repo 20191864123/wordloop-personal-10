@@ -8,6 +8,7 @@ import {
   decryptPayload,
   deriveCredentials,
   encryptPayload,
+  personalKeyFromInput,
 } from "../sync-v1.js";
 
 const root = new URL("../", import.meta.url);
@@ -21,7 +22,9 @@ test("loads the cloud sync layer before WordLoop", async () => {
   assert.match(sync, /wordloop-personal-v6/);
   assert.match(sync, /cloud-sync-v1/);
   assert.match(sync, /migration_/);
+  assert.match(sync, /未连接云端 · 点此连接/);
   assert.match(sync, /离线保存 · 联网后同步/);
+  assert.match(sync, /连接云同步/);
   assert.match(sync, /导入旧版删除进度/);
   assert.match(sync, /datasetFingerprint/);
   assert.match(sync, /AES-GCM/);
@@ -47,4 +50,11 @@ test("later delete or restore event wins", () => {
     { word: "coverage", deleted: false },
   ]);
   assert.deepEqual([...result], ["stir"]);
+});
+
+test("accepts only a valid personal link or key", () => {
+  const key = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+  assert.equal(personalKeyFromInput(key), key);
+  assert.equal(personalKeyFromInput(`https://example.com/#key=${key}`), key);
+  assert.throws(() => personalKeyFromInput("https://example.com/"), /格式不正确/);
 });

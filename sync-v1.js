@@ -162,11 +162,41 @@ function sameWords(first, second) {
 
 function statusText(value) {
   return {
-    waiting: "云同步待连接",
+    waiting: "未连接云端 · 点此连接",
     syncing: "云同步中…",
     synced: "云端已同步",
     offline: "离线保存 · 联网后同步",
   }[value];
+}
+
+function personalKeyFromInput(value) {
+  const text = String(value || "").trim();
+  let key = text;
+  try {
+    const url = new URL(text);
+    key = new URLSearchParams(url.hash.slice(1)).get("key") || "";
+  } catch {
+    if (text.includes("#")) key = new URLSearchParams(text.split("#").at(-1)).get("key") || "";
+    else if (text.startsWith("key=")) key = text.slice(4);
+  }
+  if (!/^[A-Za-z0-9_-]{43}$/.test(key) || base64UrlToBytes(key).byteLength !== 32) {
+    throw new Error("专属链接或密钥格式不正确");
+  }
+  return key;
+}
+
+async function connectCloudSync() {
+  const value = window.prompt("请粘贴完整的WordLoop专属链接，或粘贴#key=后面的密钥：");
+  if (value === null) return;
+  try {
+    const key = personalKeyFromInput(value);
+    await writeLocalEntries([[PERSONAL_KEY, key]]);
+    failureCount = 0;
+    setStatus("syncing");
+    schedule(50);
+  } catch (error) {
+    window.alert(error instanceof Error ? error.message : "无法连接云同步");
+  }
 }
 
 async function importOldProgress(file) {
@@ -242,6 +272,25 @@ function renderProgressImporter() {
   else sheet.append(button, input);
 }
 
+function renderCloudConnector() {
+  const sheet = document.querySelector(".action-sheet");
+  if (!sheet) return;
+  let button = sheet.querySelector(".connect-cloud-sync");
+  if (status !== "waiting") {
+    button?.remove();
+    return;
+  }
+  if (button) return;
+  button = document.createElement("button");
+  button.type = "button";
+  button.className = "connect-cloud-sync";
+  button.textContent = "连接云同步";
+  button.addEventListener("click", connectCloudSync);
+  const firstSecondaryButton = sheet.querySelector("button:not(.sheet-primary)");
+  if (firstSecondaryButton) firstSecondaryButton.before(button);
+  else sheet.append(button);
+}
+
 function renderStatus() {
   const copyUpdates = [
     [".action-sheet p", "你的删除进度只保存在这台设备。建议每过完一个List就导出一次备份。", "删除记录、当前List和释义开关会加密同步；断网时仍保存在本机，联网后自动补传。"],
@@ -255,13 +304,19 @@ function renderStatus() {
     }
   }
   renderProgressImporter();
+  renderCloudConnector();
 
   let indicator = document.querySelector(".cloud-sync-indicator");
   const brandCopy = document.querySelector(".header-brand > div:last-child");
   if (!brandCopy) return;
   if (!indicator) {
-    indicator = document.createElement("span");
+    indicator = document.createElement("button");
+    indicator.type = "button";
     indicator.className = "cloud-sync-indicator";
+    indicator.addEventListener("click", () => {
+      if (status === "waiting") connectCloudSync();
+      else schedule(0);
+    });
     brandCopy.append(indicator);
   }
   indicator.dataset.state = status;
@@ -478,4 +533,5 @@ export {
   encryptPayload,
   importOldProgress,
   normalizeWord,
+  personalKeyFromInput,
 };
