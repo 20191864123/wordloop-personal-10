@@ -1,0 +1,59 @@
+{
+  "format": "wordloop-personal-manifest-v1",
+  "version": "excel-row-2026-08-09-a8f9cbd12818",
+  "updatedAt": "2026-08-09T05:29:34.098Z",
+  "encryptedFile": "./personal/library.enc.json",
+  "encryption": "AES-256-GCM; key supplied only in the URL fragment and stored locally",
+  "totalWords": 16554,
+  "listCount": 10,
+  "listSizes": [
+    1656,
+    1656,
+    1656,
+    1656,
+    1655,
+    1655,
+    1655,
+    1655,
+    1655,
+    1655
+  ],
+  "datasetFingerprint": "a8f9cbd128187484e3746ffc5c6cfa448d71bff02fa043e8b2fb912ca2637ae7",
+  "plaintextSha256": "8b1daa78a0a0d25ebddfed1582a643febbfe667b8865df79fa50ddbf6ce8a31c",
+  "encryptedSha256": "89e3b75d30f38a679123f600f0f65c07d36d7ea79afa13fb6381f16cc9c1f23b",
+  "audit": {
+    "corpus": "Corpus of Contemporary American English (COCA)",
+    "officialCurrentReleaseFound": "March 2020",
+    "officialCurrentReleaseVerifiedOn": "2026-08-09",
+    "officialCorpusCoverage": "1990-2019, about 1.0 billion words, eight genres",
+    "officialFrequencyProduct": "Top 60,000 lemmas with part of speech and frequency",
+    "localSource": "COCA Frequency 60,000 — 2020.mdx (Waylon v1.2, 2024-01-12)",
+    "localSourceSha256": "22fd40c248ab3d1df6ec9eb30ce2e96d31f39eb858a55c2c3f35a94122688cce",
+    "sourceEntryCount": 60000,
+    "sourceRanksUniqueAndContinuous": true,
+    "baseConstruction": "按COCA 2020排名取至22,905，并合并同一拼写的多个词性，得到20,000个不同拼写",
+    "baseDistinctSpellings": 20000,
+    "cutoffRank": 22905,
+    "screeningNumbering": "旧《基础5000词筛选表》的Excel行号",
+    "reviewedExcelRows": [
+      4,
+      3535
+    ],
+    "reviewedWordCount": 3532,
+    "unknownRetained": 79,
+    "knownProcessed": 3453,
+    "knownRemovedFromBase": 3446,
+    "knownAlreadyAbsentFromBase": 7,
+    "unknownAddedAsSupplements": 0,
+    "explicitUnknownMissing": 0,
+    "finalDistinctSpellings": 16554,
+    "anchors": {
+      "1691": "coverage",
+      "1706": "stir",
+      "3337": "fluid",
+      "3377": "amid",
+      "3535": "seal"
+    },
+    "removedMistypedExcelRow": 3877
+  }
+}
