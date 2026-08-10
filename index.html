@@ -20,8 +20,21 @@
       .action-sheet > button.sync-cloud-now { background: #16734f !important; border-color: #16734f !important; color: #fff !important; font-weight: 800 !important; cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
       .action-sheet > button.sync-cloud-now:disabled { background: #729c89 !important; border-color: #729c89 !important; color: #fff !important; opacity: 1 !important; }
       .cloud-progress-notice { position: fixed; z-index: 70; left: 50%; bottom: calc(22px + env(safe-area-inset-bottom)); transform: translateX(-50%); width: min(92vw, 520px); min-height: 52px; padding: 12px 18px; border: 0; border-radius: 18px; background: #122c24; color: #fff; box-shadow: 0 10px 30px rgba(18,44,36,.24); font-size: 15px; font-weight: 800; touch-action: manipulation; }
+      .tools-row:has(.delete-side-toggle) { grid-template-columns: minmax(0,1fr) auto auto; }
+      .delete-side-toggle { min-height: 54px; padding: 0 15px; border: 1px solid #efcaca; border-radius: 18px; background: #fff1f1; color: #b72e2e; white-space: nowrap; font-size: 13px; font-weight: 800; touch-action: manipulation; }
+      body.delete-side-left .word-row { grid-template-columns: 72px minmax(150px,.8fr) minmax(210px,1.5fr); padding-left: 16px; padding-right: 20px; }
+      body.delete-side-left .delete-word { grid-column: 1; grid-row: 1; }
+      body.delete-side-left .word-main { grid-column: 2; grid-row: 1; }
+      body.delete-side-left .word-meaning { grid-column: 3; grid-row: 1; }
+      body.delete-side-left .word-row:not(:has(.word-meaning)) .word-main { grid-column: 2 / 4; }
+      @media (width <= 640px) {
+        .tools-row:has(.delete-side-toggle) { grid-template-columns: 1fr 1fr; }
+        .tools-row:has(.delete-side-toggle) .search-box { grid-column: 1 / -1; }
+        .delete-side-toggle { min-height: 45px; padding: 0 10px; }
+        body.delete-side-left .word-row { grid-template-columns: 62px minmax(0,.88fr) minmax(0,1.12fr); padding-left: 10px; padding-right: 14px; }
+      }
     </style>
-    <script type="module" src="./sync-v1.js?v=20260810-5"></script>
+    <script type="module" src="./sync-v1.js?v=20260810-6"></script>
     <link rel="stylesheet" crossorigin href="./assets/index-9xAbc2uX.css">
   </head>
   <body>

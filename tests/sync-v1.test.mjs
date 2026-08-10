@@ -47,6 +47,10 @@ test("loads the cloud sync layer before WordLoop", async () => {
   assert.match(sync, /reloadPreservingReadingPosition/);
   assert.match(sync, /restoreReadingPosition/);
   assert.doesNotMatch(sync, /wordsChanged[^\n]*location\.reload/);
+  assert.match(sync, /wordloop-delete-side-v1/);
+  assert.match(sync, /renderDeleteSideToggle/);
+  assert.match(sync, /把删除按钮移到左边/);
+  assert.match(html, /delete-side-left/);
   assert.match(sync, /serviceWorker\.register\("\.\/sw\.js"\)/);
   assert.match(sync, /datasetFingerprint/);
   assert.match(sync, /AES-GCM/);

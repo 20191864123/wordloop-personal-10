@@ -10,6 +10,7 @@ const FOREGROUND_SYNC_DELAY = 5000;
 const BACKGROUND_SYNC_DELAY = 60000;
 const LOCAL_WATCH_DELAY = 750;
 const READING_POSITION_KEY = "wordloop-reading-position-v1";
+const DELETE_SIDE_KEY = "wordloop-delete-side-v1";
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -390,6 +391,48 @@ function renderCloudConnector() {
   else sheet.append(button);
 }
 
+function preferredDeleteSide() {
+  try {
+    return localStorage.getItem(DELETE_SIDE_KEY) === "left" ? "left" : "right";
+  } catch {
+    return "right";
+  }
+}
+
+function applyDeleteSide(side = preferredDeleteSide()) {
+  const left = side === "left";
+  document.body.classList.toggle("delete-side-left", left);
+  for (const button of document.querySelectorAll(".delete-side-toggle")) {
+    button.textContent = left ? "← 删除在左 · 点此移到右边" : "删除在右 → · 点此移到左边";
+    button.setAttribute("aria-label", left ? "把删除按钮移到右边" : "把删除按钮移到左边");
+    button.setAttribute("aria-pressed", String(left));
+  }
+}
+
+function toggleDeleteSide() {
+  const next = preferredDeleteSide() === "left" ? "right" : "left";
+  try {
+    localStorage.setItem(DELETE_SIDE_KEY, next);
+  } catch {
+    // The switch still works for this page when storage is unavailable.
+  }
+  applyDeleteSide(next);
+}
+
+function renderDeleteSideToggle() {
+  const tools = document.querySelector(".tools-row");
+  if (!tools) return;
+  let button = tools.querySelector(".delete-side-toggle");
+  if (!button) {
+    button = document.createElement("button");
+    button.type = "button";
+    button.className = "delete-side-toggle";
+    button.addEventListener("click", toggleDeleteSide);
+    tools.append(button);
+  }
+  applyDeleteSide();
+}
+
 function renderCloudActions() {
   const sheet = document.querySelector(".action-sheet");
   if (!sheet) return;
@@ -494,6 +537,7 @@ function renderStatus() {
   renderProgressImporter();
   renderCloudConnector();
   renderCloudActions();
+  renderDeleteSideToggle();
   if (new URLSearchParams(location.search).get("recovery") === "1") {
     renderForceUploadButton();
   }
@@ -819,6 +863,7 @@ function restoreReadingPosition() {
 }
 
 async function startBrowserApp() {
+  applyDeleteSide();
   try {
     await applyCloudSnapshotBeforeApp();
   } catch (error) {
