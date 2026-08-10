@@ -29,9 +29,19 @@ test("loads the cloud sync layer before WordLoop", async () => {
   assert.match(sync, /连接云同步/);
   assert.match(sync, /重新上传本机删除记录/);
   assert.match(sync, /applyCloudSnapshotBeforeApp/);
-  assert.match(sync, /导入旧版删除进度/);
+  assert.match(sync, /复制三端同步链接/);
+  assert.match(sync, /立即同步三台设备/);
+  assert.match(sync, /FOREGROUND_SYNC_DELAY = 5000/);
+  assert.match(sync, /serviceWorker\.register\("\.\/sw\.js"\)/);
   assert.match(sync, /datasetFingerprint/);
   assert.match(sync, /AES-GCM/);
+});
+
+test("ships an offline shell without caching the cross-origin sync API", async () => {
+  const worker = await readFile(new URL("sw.js", root), "utf8");
+  assert.match(worker, /personal\/library\.enc\.json/);
+  assert.match(worker, /url\.origin !== self\.location\.origin/);
+  assert.doesNotMatch(worker, /workers\.dev/);
 });
 
 test("encrypts opaque progress and creates deterministic migration ids", async () => {

@@ -6,6 +6,8 @@ const LIBRARY_KEY = "library";
 const SYNC_META_KEY = "cloud-sync-v1";
 const SYNC_API_URL = "https://wordloop-sync.wordloop-20191864123.workers.dev/v1/sync";
 const MAX_BATCH = 500;
+const FOREGROUND_SYNC_DELAY = 5000;
+const BACKGROUND_SYNC_DELAY = 60000;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -13,6 +15,7 @@ let busy = false;
 let timer = 0;
 let failureCount = 0;
 let status = "waiting";
+let syncedDeletedCount = null;
 
 function normalizeWord(value) {
   return String(value || "").trim().toLocaleLowerCase("en-US");
@@ -164,9 +167,16 @@ function statusText(value) {
   return {
     waiting: "未连接云端 · 点此连接",
     syncing: "云同步中…",
-    synced: "云端已同步",
+    synced:
+      syncedDeletedCount === null
+        ? "云端已同步 · 约5秒自动更新"
+        : `云端已同步 · 已删${syncedDeletedCount.toLocaleString()}词`,
     offline: "离线保存 · 联网后同步",
   }[value];
+}
+
+function nextSyncDelay() {
+  return document.visibilityState === "visible" ? FOREGROUND_SYNC_DELAY : BACKGROUND_SYNC_DELAY;
 }
 
 function personalKeyFromInput(value) {
@@ -196,6 +206,26 @@ async function connectCloudSync() {
     schedule(50);
   } catch (error) {
     window.alert(error instanceof Error ? error.message : "无法连接云同步");
+  }
+}
+
+async function currentPersonalKey() {
+  return keyFromFragment() || (await readLocal(PERSONAL_KEY));
+}
+
+async function copySyncLink() {
+  const personalKey = await currentPersonalKey();
+  if (!personalKey) {
+    await connectCloudSync();
+    return;
+  }
+  const link = new URL(location.href);
+  link.hash = `key=${personalKey}`;
+  try {
+    await navigator.clipboard.writeText(link.toString());
+    window.alert("三端同步链接已复制。请在 iPhone、iPad 和 Mac 上分别打开这条链接一次。");
+  } catch {
+    window.prompt("请复制下面的三端同步链接：", link.toString());
   }
 }
 
@@ -320,6 +350,40 @@ function renderCloudConnector() {
   else sheet.append(button);
 }
 
+function renderCloudActions() {
+  const sheet = document.querySelector(".action-sheet");
+  if (!sheet) return;
+  let shareButton = sheet.querySelector(".copy-cloud-link");
+  let syncButton = sheet.querySelector(".sync-cloud-now");
+  if (status === "waiting") {
+    shareButton?.remove();
+    syncButton?.remove();
+    return;
+  }
+  if (!shareButton) {
+    shareButton = document.createElement("button");
+    shareButton.type = "button";
+    shareButton.className = "copy-cloud-link";
+    shareButton.textContent = "复制三端同步链接";
+    shareButton.addEventListener("click", copySyncLink);
+    const firstSecondaryButton = sheet.querySelector("button:not(.sheet-primary)");
+    if (firstSecondaryButton) firstSecondaryButton.before(shareButton);
+    else sheet.append(shareButton);
+  }
+  if (!syncButton) {
+    syncButton = document.createElement("button");
+    syncButton.type = "button";
+    syncButton.className = "sync-cloud-now";
+    syncButton.textContent = "立即同步三台设备";
+    syncButton.addEventListener("click", () => {
+      failureCount = 0;
+      setStatus("syncing");
+      schedule(0);
+    });
+    shareButton.after(syncButton);
+  }
+}
+
 function renderForceUploadButton() {
   const sheet = document.querySelector(".action-sheet");
   if (!sheet || sheet.querySelector(".force-upload-progress")) return;
@@ -345,9 +409,12 @@ function renderStatus() {
       if (element.textContent?.trim() === original) element.textContent = replacement;
     }
   }
-  renderProgressImporter();
   renderCloudConnector();
-  renderForceUploadButton();
+  renderCloudActions();
+  if (new URLSearchParams(location.search).get("recovery") === "1") {
+    renderProgressImporter();
+    renderForceUploadButton();
+  }
 
   let indicator = document.querySelector(".cloud-sync-indicator");
   const brandCopy = document.querySelector(".header-brand > div:last-child");
@@ -466,7 +533,7 @@ async function runSync() {
     const personalKey = fragmentKey || savedKey;
     if (!personalKey) {
       setStatus("waiting");
-      schedule(15000);
+      schedule(BACKGROUND_SYNC_DELAY);
       return;
     }
 
@@ -548,8 +615,9 @@ async function runSync() {
       [SYNC_META_KEY, meta],
     ]);
     failureCount = 0;
+    syncedDeletedCount = mergedWords.size;
     setStatus("synced");
-    schedule(12000);
+    schedule(nextSyncDelay());
     if (wordsChanged && document.readyState !== "loading") window.setTimeout(() => location.reload(), 250);
   } catch (error) {
     failureCount += 1;
@@ -585,9 +653,17 @@ async function startBrowserApp() {
   observer.observe(document.documentElement, { childList: true, subtree: true });
   window.addEventListener("online", () => schedule(100));
   window.addEventListener("focus", () => schedule(250));
+  window.addEventListener("pageshow", () => schedule(250));
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") schedule(250);
+    schedule(document.visibilityState === "visible" ? 250 : BACKGROUND_SYNC_DELAY);
   });
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("./sw.js").catch((error) => {
+        console.info("WordLoop离线缓存暂不可用。", error instanceof Error ? error.message : error);
+      });
+    });
+  }
   runSync();
 }
 
@@ -600,6 +676,7 @@ export {
   deriveCredentials,
   encryptPayload,
   importOldProgress,
+  nextSyncDelay,
   normalizeWord,
   personalKeyFromInput,
 };
