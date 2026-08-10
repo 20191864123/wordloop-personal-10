@@ -3,12 +3,15 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
+  acceptedCloudOperation,
   applyOperations,
   createMigrationOperation,
   decryptPayload,
   deletedWordsFromRemaining,
   deriveCredentials,
   encryptPayload,
+  initializeMeta,
+  mergeDeletedWords,
   personalKeyFromInput,
   progressSignature,
 } from "../sync-v1.js";
@@ -54,6 +57,12 @@ test("loads the cloud sync layer before WordLoop", async () => {
   assert.match(sync, /document\.querySelector\("\.bottom-summary"\)/);
   assert.match(sync, /删除：右侧/);
   assert.match(sync, /button\.textContent !== text/);
+  assert.match(sync, /SYNC_POLICY_VERSION = 3/);
+  assert.match(sync, /ensureMonotonicSnapshot/);
+  assert.match(sync, /installExplicitRestoreBridge/);
+  assert.match(sync, /SYNC_LEADER_LEASE/);
+  assert.doesNotMatch(sync, /wordsChanged[^\n]*reloadPreservingReadingPosition/);
+  assert.match(sync, /设备组/);
   assert.match(sync, /serviceWorker\.register\("\.\/sw\.js"\)/);
   assert.match(sync, /datasetFingerprint/);
   assert.match(sync, /AES-GCM/);
@@ -98,13 +107,60 @@ test("encrypts opaque progress and creates deterministic migration ids", async (
   assert.match(first.opId, /^migration_[a-f0-9]{64}$/);
 });
 
-test("later delete or restore event wins", () => {
+test("ordered safe delete or explicit restore event wins", () => {
   const result = applyOperations([], [
     { word: "coverage", deleted: true },
     { word: "stir", deleted: true },
-    { word: "coverage", deleted: false },
+    { word: "coverage", deleted: false, explicitRestore: true },
   ]);
   assert.deepEqual([...result], ["stir"]);
+});
+
+test("rejects legacy accidental restores but accepts explicit restores", () => {
+  assert.deepEqual(acceptedCloudOperation({ word: "coverage", deleted: true }), {
+    word: "coverage",
+    deleted: true,
+    explicitRestore: false,
+  });
+  assert.equal(acceptedCloudOperation({ word: "coverage", deleted: false }), null);
+  assert.deepEqual(acceptedCloudOperation({ word: "coverage", deleted: false, explicitRestore: true }), {
+    word: "coverage",
+    deleted: false,
+    explicitRestore: true,
+  });
+});
+
+test("policy upgrade drops queued legacy restores and replays from the beginning", async () => {
+  const upgraded = await initializeMeta(
+    { deletedWords: [] },
+    {
+      version: 1,
+      initialized: true,
+      syncPolicyVersion: 1,
+      cursor: 912,
+      pending: [{ opId: "legacy-restore", word: "coverage", deleted: false }],
+      lastObservedDeleted: ["coverage"],
+    },
+  );
+  assert.equal(upgraded.syncPolicyVersion, 3);
+  assert.equal(upgraded.cursor, 0);
+  assert.ok(upgraded.pending.every((operation) => operation.deleted || operation.explicitRestore === true));
+  assert.ok(upgraded.pending.some((operation) => operation.word === "coverage" && operation.deleted));
+});
+
+test("protected cloud snapshot survives stale local progress", () => {
+  const result = mergeDeletedWords([], ["coverage"], [{ word: "stir", deleted: true }], []);
+  assert.deepEqual([...result], ["coverage", "stir"]);
+});
+
+test("an explicit cloud undo can restore a deleted word", () => {
+  const result = mergeDeletedWords(
+    ["coverage"],
+    ["coverage"],
+    [{ word: "coverage", deleted: false, explicitRestore: true }],
+    [],
+  );
+  assert.deepEqual([...result], []);
 });
 
 test("accepts only a valid personal link or key", () => {

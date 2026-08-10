@@ -5,14 +5,18 @@ const PERSONAL_KEY = "personal-key";
 const LIBRARY_KEY = "library";
 const SYNC_META_KEY = "cloud-sync-v1";
 const SYNC_API_URL = "https://wordloop-sync.wordloop-20191864123.workers.dev/v1/sync";
+const SYNC_POLICY_VERSION = 3;
 const MAX_BATCH = 500;
 const FOREGROUND_SYNC_DELAY = 5000;
 const BACKGROUND_SYNC_DELAY = 60000;
 const LOCAL_WATCH_DELAY = 750;
 const READING_POSITION_KEY = "wordloop-reading-position-v1";
 const DELETE_SIDE_KEY = "wordloop-delete-side-v1";
+const SYNC_LEADER_KEY = "wordloop-cloud-leader-v1";
+const SYNC_LEADER_LEASE = 12000;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
+const tabId = crypto.randomUUID();
 
 let busy = false;
 let rerunRequested = false;
@@ -20,6 +24,7 @@ let timer = 0;
 let failureCount = 0;
 let status = "waiting";
 let syncedDeletedCount = null;
+let deviceGroupCode = "";
 let localWatchTimer = 0;
 let localWatchBusy = false;
 let lastLocalProgressSignature = "";
@@ -139,12 +144,18 @@ function validPendingOperation(value) {
     value &&
       typeof value.opId === "string" &&
       typeof value.word === "string" &&
-      typeof value.deleted === "boolean",
+      typeof value.deleted === "boolean" &&
+      (value.deleted || value.explicitRestore === true),
   );
 }
 
-function createOperation(word, deleted) {
-  return { opId: crypto.randomUUID(), word: normalizeWord(word), deleted };
+function createOperation(word, deleted, explicitRestore = false) {
+  return {
+    opId: crypto.randomUUID(),
+    word: normalizeWord(word),
+    deleted: Boolean(deleted),
+    explicitRestore: !deleted && explicitRestore === true,
+  };
 }
 
 async function createMigrationOperation(word) {
@@ -155,12 +166,27 @@ async function createMigrationOperation(word) {
   };
 }
 
+function acceptedCloudOperation(value) {
+  const word = normalizeWord(value?.word);
+  if (!word || typeof value?.deleted !== "boolean") return null;
+  // Older clients could emit a restore when stale page state rewrote progress.
+  // Only an explicit Undo/Restore action may now restore a deleted word.
+  if (!value.deleted && value.explicitRestore !== true) return null;
+  return { word, deleted: value.deleted, explicitRestore: value.explicitRestore === true };
+}
+
 function applyOperations(startingWords, operations) {
   const result = new Set(startingWords);
   for (const operation of operations) {
     if (operation.deleted) result.add(operation.word);
     else result.delete(operation.word);
   }
+  return result;
+}
+
+function mergeDeletedWords(currentWords, protectedWords, remoteOperations, pendingOperations) {
+  let result = applyOperations(new Set([...currentWords, ...protectedWords]), remoteOperations);
+  result = applyOperations(result, pendingOperations);
   return result;
 }
 
@@ -183,17 +209,39 @@ function deletedWordsFromRemaining(libraryWords, remainingWords) {
 function statusText(value) {
   return {
     waiting: "未连接云端 · 点此连接",
+    standby: "另一窗口正在同步 · 点此接管",
     syncing: "云同步中…",
     synced:
       syncedDeletedCount === null
-        ? "云端已同步 · 约5秒自动更新"
-        : `云端已同步 · 已删${syncedDeletedCount.toLocaleString()}词`,
+        ? `云端已同步${deviceGroupCode ? ` · 设备组${deviceGroupCode}` : ""}`
+        : `云端已同步 · 已删${syncedDeletedCount.toLocaleString()}词${deviceGroupCode ? ` · 组${deviceGroupCode}` : ""}`,
     offline: "离线保存 · 联网后同步",
   }[value];
 }
 
 function nextSyncDelay() {
   return document.visibilityState === "visible" ? FOREGROUND_SYNC_DELAY : BACKGROUND_SYNC_DELAY;
+}
+
+function claimSyncLeadership(force = false) {
+  try {
+    const now = Date.now();
+    const saved = JSON.parse(localStorage.getItem(SYNC_LEADER_KEY) || "null");
+    if (!force && saved?.tabId !== tabId && Number(saved?.expiresAt) > now) return false;
+    localStorage.setItem(SYNC_LEADER_KEY, JSON.stringify({ tabId, expiresAt: now + SYNC_LEADER_LEASE }));
+    return true;
+  } catch {
+    return true;
+  }
+}
+
+function releaseSyncLeadership() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SYNC_LEADER_KEY) || "null");
+    if (saved?.tabId === tabId) localStorage.removeItem(SYNC_LEADER_KEY);
+  } catch {
+    // Continue normally when localStorage is unavailable.
+  }
 }
 
 function progressSignature(progress) {
@@ -493,7 +541,7 @@ async function manualSyncNow(event) {
   button.textContent = "正在同步…";
   failureCount = 0;
   const nextResult = waitForNextSyncResult();
-  const immediateResult = await runSync();
+  const immediateResult = await runSync(true);
   const result = immediateResult === "queued" ? await nextResult : immediateResult;
   const liveButton = document.querySelector(".sync-cloud-now");
   if (!(liveButton instanceof HTMLButtonElement)) return;
@@ -557,7 +605,7 @@ function renderStatus() {
       if (status === "waiting") connectCloudSync();
       else {
         failureCount = 0;
-        void runSync();
+        void runSync(true);
       }
     });
     brandCopy.append(indicator);
@@ -601,25 +649,52 @@ async function watchLocalProgress() {
 }
 
 async function initializeMeta(progress, savedMeta) {
-  if (savedMeta?.version === 1 && savedMeta.initialized) {
-    return {
-      ...savedMeta,
-      pending: Array.isArray(savedMeta.pending) ? savedMeta.pending.filter(validPendingOperation) : [],
-      lastObservedDeleted: Array.isArray(savedMeta.lastObservedDeleted) ? savedMeta.lastObservedDeleted : [],
-    };
-  }
   const deletedWords = Array.isArray(progress?.deletedWords)
     ? [...new Set(progress.deletedWords.map(normalizeWord).filter(Boolean))]
     : [];
+  if (savedMeta?.version === 1 && savedMeta.initialized) {
+    const pending = Array.isArray(savedMeta.pending) ? savedMeta.pending.filter(validPendingOperation) : [];
+    const previousDeleted = Array.isArray(savedMeta.lastObservedDeleted)
+      ? savedMeta.lastObservedDeleted.map(normalizeWord).filter(Boolean)
+      : [];
+    if (savedMeta.syncPolicyVersion === SYNC_POLICY_VERSION) {
+      return {
+        ...savedMeta,
+        pending,
+        lastObservedDeleted: [...new Set([...previousDeleted, ...deletedWords])].sort(),
+        snapshotDeletedWords: Array.isArray(savedMeta.snapshotDeletedWords)
+          ? [...new Set(savedMeta.snapshotDeletedWords.map(normalizeWord).filter(Boolean))].sort()
+          : [],
+      };
+    }
+
+    const snapshotOperations = await Promise.all(
+      [...new Set([...previousDeleted, ...deletedWords])].map(createMigrationOperation),
+    );
+    const operationIds = new Set(pending.map((operation) => operation.opId));
+    for (const operation of snapshotOperations) {
+      if (!operationIds.has(operation.opId)) pending.push(operation);
+    }
+    return {
+      ...savedMeta,
+      syncPolicyVersion: SYNC_POLICY_VERSION,
+      cursor: 0,
+      pending,
+      lastObservedDeleted: [...new Set([...previousDeleted, ...deletedWords])].sort(),
+      snapshotDeletedWords: [],
+    };
+  }
   const pending = await Promise.all(deletedWords.map(createMigrationOperation));
   return {
     version: 1,
     initialized: true,
+    syncPolicyVersion: SYNC_POLICY_VERSION,
     cursor: 0,
     uiRevision: 0,
     hasSyncedOnce: false,
     pending,
     lastObservedDeleted: deletedWords.sort(),
+    snapshotDeletedWords: [],
     lastObservedActiveList: progress?.activeList ?? null,
     lastObservedShowMeaning: progress?.showMeaning ?? null,
     uiDirty: Boolean(progress),
@@ -633,8 +708,8 @@ function observeLocalChanges(progress, meta) {
   );
   const previous = new Set((meta.lastObservedDeleted || []).map(normalizeWord));
   for (const word of current) if (!previous.has(word)) meta.pending.push(createOperation(word, true));
-  for (const word of previous) if (!current.has(word)) meta.pending.push(createOperation(word, false));
-  meta.lastObservedDeleted = [...current].sort();
+  meta.pending = meta.pending.filter((operation) => operation.deleted || operation.explicitRestore);
+  meta.lastObservedDeleted = [...new Set([...previous, ...current])].sort();
 
   if (meta.hasSyncedOnce || meta.lastObservedActiveList !== null) {
     const listChanged = Number(progress.activeList) !== Number(meta.lastObservedActiveList);
@@ -646,6 +721,66 @@ function observeLocalChanges(progress, meta) {
   return meta;
 }
 
+async function ensureMonotonicSnapshot(progress, meta) {
+  const knownDeleted = new Set([
+    ...(meta.lastObservedDeleted || []).map(normalizeWord),
+    ...(Array.isArray(progress?.deletedWords) ? progress.deletedWords : []).map(normalizeWord),
+  ]);
+  const uploadedSnapshot = new Set((meta.snapshotDeletedWords || []).map(normalizeWord));
+  const pendingIds = new Set(meta.pending.map((operation) => operation.opId));
+  const missingWords = [...knownDeleted].filter(Boolean).filter((word) => !uploadedSnapshot.has(word));
+  const operations = await Promise.all(missingWords.map(createMigrationOperation));
+  for (const operation of operations) {
+    if (!pendingIds.has(operation.opId)) {
+      meta.pending.push(operation);
+      pendingIds.add(operation.opId);
+    }
+  }
+  return meta;
+}
+
+async function queueExplicitRestores(words = null) {
+  try {
+    const [progress, savedMeta] = await Promise.all([readLocal(PROGRESS_KEY), readLocal(SYNC_META_KEY)]);
+    if (!progress || !savedMeta) return;
+    const meta = await initializeMeta(progress, savedMeta);
+    const current = new Set(
+      (Array.isArray(progress.deletedWords) ? progress.deletedWords : []).map(normalizeWord).filter(Boolean),
+    );
+    const previous = new Set((meta.lastObservedDeleted || []).map(normalizeWord));
+    const requested = words ? new Set(words.map(normalizeWord)) : previous;
+    const restored = [...requested].filter((word) => previous.has(word) && !current.has(word));
+    if (restored.length === 0) return;
+    meta.pending.push(...restored.map((word) => createOperation(word, false, true)));
+    meta.lastObservedDeleted = [...previous].filter((word) => !restored.includes(word)).sort();
+    await writeLocalEntries([[SYNC_META_KEY, meta]]);
+    failureCount = 0;
+    schedule(50);
+  } catch (error) {
+    console.info("WordLoop撤销同步暂不可用。", error instanceof Error ? error.message : error);
+  }
+}
+
+function installExplicitRestoreBridge() {
+  document.addEventListener(
+    "click",
+    (event) => {
+      const target = event.target instanceof Element ? event.target : null;
+      const undoButton = target?.closest(".undo-toast button");
+      if (undoButton) {
+        const word = document.querySelector(".undo-toast strong")?.textContent?.trim();
+        if (word) window.setTimeout(() => queueExplicitRestores([word]), 350);
+        return;
+      }
+      const actionButton = target?.closest(".action-sheet button");
+      if (actionButton?.textContent?.includes("恢复当前List已删除词")) {
+        window.setTimeout(() => queueExplicitRestores(), 350);
+      }
+    },
+    true,
+  );
+}
+
 async function postSync(credentials, cursor, pending, uiState) {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), 8000);
@@ -653,7 +788,14 @@ async function postSync(credentials, cursor, pending, uiState) {
     const operations = await Promise.all(
       pending.map(async (operation) => ({
         opId: operation.opId,
-        payload: await encryptPayload({ word: operation.word, deleted: operation.deleted }, credentials),
+        payload: await encryptPayload(
+          {
+            word: operation.word,
+            deleted: operation.deleted,
+            explicitRestore: !operation.deleted && operation.explicitRestore === true,
+          },
+          credentials,
+        ),
       })),
     );
     const response = await fetch(SYNC_API_URL, {
@@ -675,10 +817,15 @@ async function postSync(credentials, cursor, pending, uiState) {
   }
 }
 
-async function runSync() {
+async function runSync(forceLeadership = false) {
   if (busy) {
     rerunRequested = true;
     return "queued";
+  }
+  if (!claimSyncLeadership(forceLeadership)) {
+    setStatus("standby");
+    schedule(4000);
+    return "standby";
   }
   busy = true;
   rerunRequested = false;
@@ -698,13 +845,16 @@ async function runSync() {
 
     let progress = initialProgress;
     let meta = observeLocalChanges(progress, await initializeMeta(progress, savedMeta));
+    meta = await ensureMonotonicSnapshot(progress, meta);
     await writeLocalEntries([[SYNC_META_KEY, meta]]);
     setStatus("syncing");
     const credentials = await deriveCredentials(personalKey);
+    deviceGroupCode = credentials.syncId.slice(0, 6).toUpperCase();
     let cursor = Math.max(0, Number(meta.cursor) || 0);
     const remoteOperations = [];
     const pendingQueue = [...meta.pending];
     const acknowledged = new Set();
+    const acknowledgedOperations = [];
     let latestUiState = null;
     let sentUi = false;
 
@@ -722,13 +872,13 @@ async function runSync() {
         sentUi = true;
       }
       const response = await postSync(credentials, cursor, sent, uiState);
-      for (const operation of sent) acknowledged.add(operation.opId);
+      for (const operation of sent) {
+        acknowledged.add(operation.opId);
+        acknowledgedOperations.push(operation);
+      }
       for (const event of response.events) {
-        const operation = await decryptPayload(event.payload, credentials);
-        const word = normalizeWord(operation?.word);
-        if (word && typeof operation?.deleted === "boolean") {
-          remoteOperations.push({ word, deleted: operation.deleted });
-        }
+        const operation = acceptedCloudOperation(await decryptPayload(event.payload, credentials));
+        if (operation) remoteOperations.push(operation);
       }
       cursor = Math.max(cursor, Number(response.cursor) || cursor);
       if (response.uiState) latestUiState = response.uiState;
@@ -743,12 +893,16 @@ async function runSync() {
       showMeaning: true,
     };
     meta = observeLocalChanges(progress, meta);
+    meta = await ensureMonotonicSnapshot(progress, meta);
     meta.pending = meta.pending.filter((operation) => !acknowledged.has(operation.opId));
     const currentWords = new Set(
       (Array.isArray(progress.deletedWords) ? progress.deletedWords : []).map(normalizeWord).filter(Boolean),
     );
-    let mergedWords = applyOperations(currentWords, remoteOperations);
-    mergedWords = applyOperations(mergedWords, meta.pending);
+    const protectedDeletedWords = new Set([
+      ...(meta.lastObservedDeleted || []).map(normalizeWord),
+      ...(meta.snapshotDeletedWords || []).map(normalizeWord),
+    ]);
+    const mergedWords = mergeDeletedWords(currentWords, protectedDeletedWords, remoteOperations, meta.pending);
     const wordsChanged = !sameWords(currentWords, mergedWords);
 
     if (sentUi) meta.uiDirty = false;
@@ -763,6 +917,12 @@ async function runSync() {
 
     progress.deletedWords = [...mergedWords].sort();
     meta.lastObservedDeleted = [...mergedWords].sort();
+    let confirmedSnapshot = applyOperations(
+      new Set((meta.snapshotDeletedWords || []).map(normalizeWord)),
+      remoteOperations,
+    );
+    confirmedSnapshot = applyOperations(confirmedSnapshot, acknowledgedOperations);
+    meta.snapshotDeletedWords = [...confirmedSnapshot].sort();
     meta.cursor = cursor;
     meta.hasSyncedOnce = true;
     if (wordsChanged) {
@@ -794,6 +954,14 @@ async function runSync() {
 async function applyCloudSnapshotBeforeApp() {
   const [progress, meta] = await Promise.all([readLocal(PROGRESS_KEY), readLocal(SYNC_META_KEY)]);
   if (!progress || !meta?.applyOnNextLoad || !Array.isArray(meta.appliedDeletedWords)) return;
+  if (meta.syncPolicyVersion !== SYNC_POLICY_VERSION) {
+    // Never apply a snapshot written by the legacy client that could contain
+    // accidental restores. Policy 3 replays the encrypted event history safely.
+    meta.applyOnNextLoad = false;
+    delete meta.appliedDeletedWords;
+    await writeLocalEntries([[SYNC_META_KEY, meta]]);
+    return;
+  }
   progress.deletedWords = [...new Set(meta.appliedDeletedWords.map(normalizeWord).filter(Boolean))].sort();
   meta.lastObservedDeleted = [...progress.deletedWords];
   meta.applyOnNextLoad = false;
@@ -874,19 +1042,23 @@ async function startBrowserApp() {
     console.info("WordLoop启动前进度恢复失败，将继续使用本机数据。", error instanceof Error ? error.message : error);
   }
   await import("./assets/index-DiX3UPkj.js");
+  installExplicitRestoreBridge();
   restoreReadingPosition();
   const observer = new MutationObserver(renderStatus);
   observer.observe(document.documentElement, { childList: true, subtree: true });
   window.addEventListener("online", () => schedule(100));
   window.addEventListener("focus", () => schedule(250));
   window.addEventListener("pageshow", () => schedule(250));
-  window.addEventListener("pagehide", () => runSync());
+  window.addEventListener("pagehide", () => {
+    void runSync(true);
+  });
+  window.addEventListener("unload", releaseSyncLeadership);
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") {
       schedule(250);
       watchLocalProgress();
     } else {
-      runSync();
+      void runSync(true).finally(releaseSyncLeadership);
     }
   });
   if ("serviceWorker" in navigator) {
@@ -903,6 +1075,7 @@ async function startBrowserApp() {
 if (typeof window !== "undefined" && typeof indexedDB !== "undefined") startBrowserApp();
 
 export {
+  acceptedCloudOperation,
   applyOperations,
   createMigrationOperation,
   decryptPayload,
@@ -910,6 +1083,8 @@ export {
   deriveCredentials,
   encryptPayload,
   importOldProgress,
+  initializeMeta,
+  mergeDeletedWords,
   nextSyncDelay,
   normalizeWord,
   personalKeyFromInput,
