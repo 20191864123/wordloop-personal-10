@@ -6,6 +6,7 @@ import {
   applyOperations,
   createMigrationOperation,
   decryptPayload,
+  deletedWordsFromRemaining,
   deriveCredentials,
   encryptPayload,
   personalKeyFromInput,
@@ -29,12 +30,23 @@ test("loads the cloud sync layer before WordLoop", async () => {
   assert.match(sync, /连接云同步/);
   assert.match(sync, /重新上传本机删除记录/);
   assert.match(sync, /applyCloudSnapshotBeforeApp/);
+  assert.match(sync, /导入iPhone备份并同步三端/);
+  assert.match(sync, /authoritativeImportAt/);
+  assert.match(sync, /renderProgressImporter\(\);\s+renderCloudConnector\(\);/);
   assert.match(sync, /复制三端同步链接/);
   assert.match(sync, /立即同步三台设备/);
   assert.match(sync, /FOREGROUND_SYNC_DELAY = 5000/);
   assert.match(sync, /serviceWorker\.register\("\.\/sw\.js"\)/);
   assert.match(sync, /datasetFingerprint/);
   assert.match(sync, /AES-GCM/);
+});
+
+test("converts an iPhone remaining-word backup into authoritative deletions", () => {
+  const deleted = deletedWordsFromRemaining(
+    [{ word: "coverage" }, { word: "stir" }, { word: "adept" }, { word: "fault" }],
+    [{ word: "stir" }, { word: "fault" }],
+  );
+  assert.deepEqual(deleted, ["coverage", "adept"]);
 });
 
 test("ships an offline shell without caching the cross-origin sync API", async () => {

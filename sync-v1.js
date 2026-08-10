@@ -163,6 +163,16 @@ function sameWords(first, second) {
   return true;
 }
 
+function deletedWordsFromRemaining(libraryWords, remainingWords) {
+  const allWords = [
+    ...new Set((Array.isArray(libraryWords) ? libraryWords : []).map((item) => normalizeWord(item?.word ?? item)).filter(Boolean)),
+  ];
+  const remaining = new Set(
+    (Array.isArray(remainingWords) ? remainingWords : []).map((item) => normalizeWord(item?.word ?? item)).filter(Boolean),
+  );
+  return allWords.filter((word) => !remaining.has(word));
+}
+
 function statusText(value) {
   return {
     waiting: "未连接云端 · 点此连接",
@@ -263,7 +273,11 @@ async function importOldProgress(file) {
   if (!Array.isArray(exported?.words) || exported.words.length === 0) {
     throw new Error("这不是WordLoop导出的剩余词库JSON");
   }
-  const [library, progress] = await Promise.all([readLocal(LIBRARY_KEY), readLocal(PROGRESS_KEY)]);
+  const [library, progress, savedMeta] = await Promise.all([
+    readLocal(LIBRARY_KEY),
+    readLocal(PROGRESS_KEY),
+    readLocal(SYNC_META_KEY),
+  ]);
   if (!Array.isArray(library?.words) || library.words.length === 0) {
     throw new Error("请先用专属链接载入完整词库，再导入旧进度");
   }
@@ -283,7 +297,7 @@ async function importOldProgress(file) {
     throw new Error("旧文件中的单词与当前词库对不上，请不要强行导入");
   }
 
-  const deletedWords = allWords.filter((word) => !remaining.has(word));
+  const deletedWords = deletedWordsFromRemaining(library.words, exported.words);
   if (Number(exported.deletedCount) > 0 && deletedWords.length === 0) {
     throw new Error("检测到旧文件有删除记录，但没有成功转换，请把文件发给Codex");
   }
@@ -294,8 +308,21 @@ async function importOldProgress(file) {
     activeList: Math.min(10, Math.max(1, Number(progress?.activeList) || 1)),
     showMeaning: progress?.showMeaning !== false,
   };
-  await writeLocalEntries([[PROGRESS_KEY, nextProgress]]);
-  return deletedWords.length;
+  let meta = await initializeMeta(progress, savedMeta);
+  meta.lastObservedDeleted = [
+    ...new Set((Array.isArray(progress?.deletedWords) ? progress.deletedWords : []).map(normalizeWord).filter(Boolean)),
+  ].sort();
+  meta = observeLocalChanges(nextProgress, meta);
+  meta.pending.push(...deletedWords.map((word) => createOperation(word, true)));
+  meta.lastObservedDeleted = [...nextProgress.deletedWords];
+  meta.applyOnNextLoad = true;
+  meta.appliedDeletedWords = [...nextProgress.deletedWords];
+  meta.authoritativeImportAt = Date.now();
+  await writeLocalEntries([
+    [PROGRESS_KEY, nextProgress],
+    [SYNC_META_KEY, meta],
+  ]);
+  return { deletedCount: deletedWords.length, queuedCount: meta.pending.length };
 }
 
 function renderProgressImporter() {
@@ -305,7 +332,7 @@ function renderProgressImporter() {
   const input = document.createElement("input");
   button.type = "button";
   button.className = "import-old-progress";
-  button.textContent = "导入旧版删除进度";
+  button.textContent = "导入iPhone备份并同步三端";
   input.type = "file";
   input.accept = "application/json,.json";
   input.hidden = true;
@@ -315,15 +342,17 @@ function renderProgressImporter() {
     input.value = "";
     if (!file) return;
     button.disabled = true;
-    button.textContent = "正在恢复旧进度…";
+    button.textContent = "正在导入并准备云同步…";
     try {
-      const count = await importOldProgress(file);
-      window.alert(`已恢复 ${count.toLocaleString()} 个删除记录。`);
+      const result = await importOldProgress(file);
+      window.alert(
+        `已从iPhone备份恢复 ${result.deletedCount.toLocaleString()} 个删除记录。接下来会自动上传云端；请保持本页打开，直到顶部重新显示“云端已同步”。`,
+      );
       location.reload();
     } catch (error) {
       window.alert(error instanceof Error ? error.message : "旧进度导入失败");
       button.disabled = false;
-      button.textContent = "导入旧版删除进度";
+      button.textContent = "导入iPhone备份并同步三端";
     }
   });
   const firstSecondaryButton = sheet.querySelector("button:not(.sheet-primary)");
@@ -409,10 +438,10 @@ function renderStatus() {
       if (element.textContent?.trim() === original) element.textContent = replacement;
     }
   }
+  renderProgressImporter();
   renderCloudConnector();
   renderCloudActions();
   if (new URLSearchParams(location.search).get("recovery") === "1") {
-    renderProgressImporter();
     renderForceUploadButton();
   }
 
@@ -673,6 +702,7 @@ export {
   applyOperations,
   createMigrationOperation,
   decryptPayload,
+  deletedWordsFromRemaining,
   deriveCredentials,
   encryptPayload,
   importOldProgress,
