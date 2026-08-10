@@ -403,9 +403,11 @@ function applyDeleteSide(side = preferredDeleteSide()) {
   const left = side === "left";
   document.body.classList.toggle("delete-side-left", left);
   for (const button of document.querySelectorAll(".delete-side-toggle")) {
-    button.textContent = left ? "← 删除：左侧" : "删除：右侧 →";
-    button.setAttribute("aria-label", left ? "把删除按钮移到右边" : "把删除按钮移到左边");
-    button.setAttribute("aria-pressed", String(left));
+    const text = left ? "← 删除：左侧" : "删除：右侧 →";
+    const label = left ? "把删除按钮移到右边" : "把删除按钮移到左边";
+    if (button.textContent !== text) button.textContent = text;
+    if (button.getAttribute("aria-label") !== label) button.setAttribute("aria-label", label);
+    if (button.getAttribute("aria-pressed") !== String(left)) button.setAttribute("aria-pressed", String(left));
   }
 }
 
