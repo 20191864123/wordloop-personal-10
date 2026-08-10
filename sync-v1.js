@@ -414,13 +414,55 @@ function renderCloudActions() {
     syncButton.type = "button";
     syncButton.className = "sync-cloud-now";
     syncButton.textContent = "立即同步三台设备";
-    syncButton.addEventListener("click", () => {
-      failureCount = 0;
-      setStatus("syncing");
-      schedule(0);
-    });
+    syncButton.addEventListener("click", manualSyncNow);
     shareButton.after(syncButton);
   }
+}
+
+function waitForNextSyncResult(timeout = 12000) {
+  return new Promise((resolve) => {
+    let timeoutId;
+    const finish = (result) => {
+      window.removeEventListener("wordloop-cloud-status", onStatus);
+      window.clearTimeout(timeoutId);
+      resolve(result);
+    };
+    const onStatus = (event) => {
+      if (["synced", "offline", "waiting"].includes(event.detail)) finish(event.detail);
+    };
+    window.addEventListener("wordloop-cloud-status", onStatus);
+    timeoutId = window.setTimeout(() => finish(status), timeout);
+  });
+}
+
+async function manualSyncNow(event) {
+  event.preventDefault();
+  event.stopPropagation();
+  const button = event.currentTarget;
+  if (!(button instanceof HTMLButtonElement) || button.disabled) return;
+
+  button.disabled = true;
+  button.textContent = "正在同步…";
+  failureCount = 0;
+  const nextResult = waitForNextSyncResult();
+  const immediateResult = await runSync();
+  const result = immediateResult === "queued" ? await nextResult : immediateResult;
+  const liveButton = document.querySelector(".sync-cloud-now");
+  if (!(liveButton instanceof HTMLButtonElement)) return;
+
+  if (result === "synced") {
+    liveButton.textContent = "同步完成 ✓";
+    window.setTimeout(() => {
+      const currentButton = document.querySelector(".sync-cloud-now");
+      if (!(currentButton instanceof HTMLButtonElement)) return;
+      currentButton.disabled = false;
+      currentButton.textContent = "立即同步三台设备";
+    }, 1200);
+    return;
+  }
+
+  liveButton.disabled = false;
+  liveButton.textContent = result === "waiting" ? "请先连接云同步" : "同步失败，点此重试";
 }
 
 function renderForceUploadButton() {
@@ -464,7 +506,10 @@ function renderStatus() {
     indicator.className = "cloud-sync-indicator";
     indicator.addEventListener("click", () => {
       if (status === "waiting") connectCloudSync();
-      else schedule(0);
+      else {
+        failureCount = 0;
+        void runSync();
+      }
     });
     brandCopy.append(indicator);
   }
@@ -584,7 +629,7 @@ async function postSync(credentials, cursor, pending, uiState) {
 async function runSync() {
   if (busy) {
     rerunRequested = true;
-    return;
+    return "queued";
   }
   busy = true;
   rerunRequested = false;
@@ -599,7 +644,7 @@ async function runSync() {
     if (!personalKey) {
       setStatus("waiting");
       schedule(BACKGROUND_SYNC_DELAY);
-      return;
+      return "waiting";
     }
 
     let progress = initialProgress;
@@ -684,11 +729,13 @@ async function runSync() {
     setStatus("synced");
     schedule(nextSyncDelay());
     if (wordsChanged && document.readyState !== "loading") window.setTimeout(() => location.reload(), 250);
+    return "synced";
   } catch (error) {
     failureCount += 1;
     setStatus("offline");
     schedule(failureCount === 1 ? 20000 : failureCount === 2 ? 60000 : 300000);
     console.info("WordLoop云同步暂不可用，本机进度已保留。", error instanceof Error ? error.message : error);
+    return "offline";
   } finally {
     busy = false;
     if (rerunRequested) schedule(0);

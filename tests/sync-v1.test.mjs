@@ -36,6 +36,9 @@ test("loads the cloud sync layer before WordLoop", async () => {
   assert.match(sync, /renderProgressImporter\(\);\s+renderCloudConnector\(\);/);
   assert.match(sync, /复制三端同步链接/);
   assert.match(sync, /立即同步三台设备/);
+  assert.match(sync, /正在同步…/);
+  assert.match(sync, /同步完成 \u2713/);
+  assert.match(sync, /syncButton\.addEventListener\("click", manualSyncNow\)/);
   assert.match(sync, /FOREGROUND_SYNC_DELAY = 5000/);
   assert.match(sync, /LOCAL_WATCH_DELAY = 750/);
   assert.match(sync, /pagehide/);
