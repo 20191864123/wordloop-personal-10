@@ -403,7 +403,7 @@ function applyDeleteSide(side = preferredDeleteSide()) {
   const left = side === "left";
   document.body.classList.toggle("delete-side-left", left);
   for (const button of document.querySelectorAll(".delete-side-toggle")) {
-    button.textContent = left ? "← 删除在左 · 点此移到右边" : "删除在右 → · 点此移到左边";
+    button.textContent = left ? "← 删除：左侧" : "删除：右侧 →";
     button.setAttribute("aria-label", left ? "把删除按钮移到右边" : "把删除按钮移到左边");
     button.setAttribute("aria-pressed", String(left));
   }
@@ -420,15 +420,17 @@ function toggleDeleteSide() {
 }
 
 function renderDeleteSideToggle() {
-  const tools = document.querySelector(".tools-row");
-  if (!tools) return;
-  let button = tools.querySelector(".delete-side-toggle");
+  const summary = document.querySelector(".bottom-summary");
+  if (!summary) return;
+  let button = summary.querySelector(".delete-side-toggle");
   if (!button) {
     button = document.createElement("button");
     button.type = "button";
     button.className = "delete-side-toggle";
     button.addEventListener("click", toggleDeleteSide);
-    tools.append(button);
+    const exportButton = summary.querySelector(":scope > button");
+    if (exportButton) exportButton.before(button);
+    else summary.append(button);
   }
   applyDeleteSide();
 }
