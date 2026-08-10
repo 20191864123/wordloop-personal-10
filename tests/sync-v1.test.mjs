@@ -43,6 +43,10 @@ test("loads the cloud sync layer before WordLoop", async () => {
   assert.match(sync, /LOCAL_WATCH_DELAY = 750/);
   assert.match(sync, /pagehide/);
   assert.match(sync, /rerunRequested/);
+  assert.match(sync, /renderIncomingProgressNotice/);
+  assert.match(sync, /reloadPreservingReadingPosition/);
+  assert.match(sync, /restoreReadingPosition/);
+  assert.doesNotMatch(sync, /wordsChanged[^\n]*location\.reload/);
   assert.match(sync, /serviceWorker\.register\("\.\/sw\.js"\)/);
   assert.match(sync, /datasetFingerprint/);
   assert.match(sync, /AES-GCM/);

@@ -9,6 +9,7 @@ const MAX_BATCH = 500;
 const FOREGROUND_SYNC_DELAY = 5000;
 const BACKGROUND_SYNC_DELAY = 60000;
 const LOCAL_WATCH_DELAY = 750;
+const READING_POSITION_KEY = "wordloop-reading-position-v1";
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -358,7 +359,7 @@ function renderProgressImporter() {
       window.alert(
         `已从iPhone备份恢复 ${result.deletedCount.toLocaleString()} 个删除记录。接下来会自动上传云端；请保持本页打开，直到顶部重新显示“云端已同步”。`,
       );
-      location.reload();
+      reloadPreservingReadingPosition();
     } catch (error) {
       window.alert(error instanceof Error ? error.message : "旧进度导入失败");
       button.disabled = false;
@@ -728,7 +729,7 @@ async function runSync() {
     syncedDeletedCount = mergedWords.size;
     setStatus("synced");
     schedule(nextSyncDelay());
-    if (wordsChanged && document.readyState !== "loading") window.setTimeout(() => location.reload(), 250);
+    if (wordsChanged && document.readyState !== "loading") renderIncomingProgressNotice();
     return "synced";
   } catch (error) {
     failureCount += 1;
@@ -755,6 +756,68 @@ async function applyCloudSnapshotBeforeApp() {
   ]);
 }
 
+function captureReadingPosition() {
+  try {
+    const rows = [...document.querySelectorAll(".word-row")];
+    const anchor = rows.find((row) => row.getBoundingClientRect().bottom > 72);
+    const word = anchor?.querySelector(".word-main strong")?.textContent?.trim() || "";
+    const offset = anchor ? Math.max(0, anchor.getBoundingClientRect().top) : 0;
+    sessionStorage.setItem(
+      READING_POSITION_KEY,
+      JSON.stringify({ word, offset, scrollTop: window.scrollY, savedAt: Date.now() }),
+    );
+  } catch {
+    // Some private browsing modes may not expose sessionStorage.
+  }
+}
+
+function reloadPreservingReadingPosition() {
+  captureReadingPosition();
+  location.reload();
+}
+
+function renderIncomingProgressNotice() {
+  let button = document.querySelector(".cloud-progress-notice");
+  if (button) return;
+  button = document.createElement("button");
+  button.type = "button";
+  button.className = "cloud-progress-notice";
+  button.textContent = "已收到其他设备进度 · 点此更新（不会跳回顶部）";
+  button.addEventListener("click", reloadPreservingReadingPosition);
+  document.body.append(button);
+}
+
+function restoreReadingPosition() {
+  let saved;
+  try {
+    saved = JSON.parse(sessionStorage.getItem(READING_POSITION_KEY) || "null");
+    sessionStorage.removeItem(READING_POSITION_KEY);
+  } catch {
+    return;
+  }
+  if (!saved || Date.now() - Number(saved.savedAt || 0) > 120000) return;
+
+  const restore = (attempt = 0) => {
+    const rows = [...document.querySelectorAll(".word-row")];
+    const anchor = rows.find(
+      (row) => normalizeWord(row.querySelector(".word-main strong")?.textContent) === normalizeWord(saved.word),
+    );
+    if (anchor) {
+      anchor.scrollIntoView({ block: "start" });
+      window.scrollBy({ top: -Math.max(0, Number(saved.offset) || 0), behavior: "auto" });
+      return;
+    }
+    const loadMore = document.querySelector(".load-more");
+    if (loadMore instanceof HTMLButtonElement && attempt < 30) {
+      loadMore.click();
+      window.setTimeout(() => restore(attempt + 1), 80);
+      return;
+    }
+    window.scrollTo({ top: Math.max(0, Number(saved.scrollTop) || 0), behavior: "auto" });
+  };
+  window.setTimeout(restore, 250);
+}
+
 async function startBrowserApp() {
   try {
     await applyCloudSnapshotBeforeApp();
@@ -762,6 +825,7 @@ async function startBrowserApp() {
     console.info("WordLoop启动前进度恢复失败，将继续使用本机数据。", error instanceof Error ? error.message : error);
   }
   await import("./assets/index-DiX3UPkj.js");
+  restoreReadingPosition();
   const observer = new MutationObserver(renderStatus);
   observer.observe(document.documentElement, { childList: true, subtree: true });
   window.addEventListener("online", () => schedule(100));
