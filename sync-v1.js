@@ -8,14 +8,19 @@ const SYNC_API_URL = "https://wordloop-sync.wordloop-20191864123.workers.dev/v1/
 const MAX_BATCH = 500;
 const FOREGROUND_SYNC_DELAY = 5000;
 const BACKGROUND_SYNC_DELAY = 60000;
+const LOCAL_WATCH_DELAY = 750;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
 let busy = false;
+let rerunRequested = false;
 let timer = 0;
 let failureCount = 0;
 let status = "waiting";
 let syncedDeletedCount = null;
+let localWatchTimer = 0;
+let localWatchBusy = false;
+let lastLocalProgressSignature = "";
 
 function normalizeWord(value) {
   return String(value || "").trim().toLocaleLowerCase("en-US");
@@ -187,6 +192,11 @@ function statusText(value) {
 
 function nextSyncDelay() {
   return document.visibilityState === "visible" ? FOREGROUND_SYNC_DELAY : BACKGROUND_SYNC_DELAY;
+}
+
+function progressSignature(progress) {
+  const deletedWords = Array.isArray(progress?.deletedWords) ? progress.deletedWords : [];
+  return `${deletedWords.length}|${Number(progress?.activeList) || 1}|${progress?.showMeaning !== false}`;
 }
 
 function personalKeyFromInput(value) {
@@ -474,6 +484,28 @@ function schedule(delay) {
   timer = window.setTimeout(runSync, delay);
 }
 
+async function watchLocalProgress() {
+  if (localWatchBusy) return;
+  localWatchBusy = true;
+  window.clearTimeout(localWatchTimer);
+  try {
+    if (document.visibilityState === "visible") {
+      const progress = await readLocal(PROGRESS_KEY);
+      const signature = progressSignature(progress);
+      if (lastLocalProgressSignature && signature !== lastLocalProgressSignature) schedule(50);
+      lastLocalProgressSignature = signature;
+    }
+  } catch (error) {
+    console.info("WordLoop本机进度监听暂不可用。", error instanceof Error ? error.message : error);
+  } finally {
+    localWatchBusy = false;
+    localWatchTimer = window.setTimeout(
+      watchLocalProgress,
+      document.visibilityState === "visible" ? LOCAL_WATCH_DELAY : BACKGROUND_SYNC_DELAY,
+    );
+  }
+}
+
 async function initializeMeta(progress, savedMeta) {
   if (savedMeta?.version === 1 && savedMeta.initialized) {
     return {
@@ -550,8 +582,12 @@ async function postSync(credentials, cursor, pending, uiState) {
 }
 
 async function runSync() {
-  if (busy) return;
+  if (busy) {
+    rerunRequested = true;
+    return;
+  }
   busy = true;
+  rerunRequested = false;
   try {
     const [fragmentKey, savedKey, initialProgress, savedMeta] = await Promise.all([
       Promise.resolve(keyFromFragment()),
@@ -655,6 +691,7 @@ async function runSync() {
     console.info("WordLoop云同步暂不可用，本机进度已保留。", error instanceof Error ? error.message : error);
   } finally {
     busy = false;
+    if (rerunRequested) schedule(0);
   }
 }
 
@@ -683,8 +720,14 @@ async function startBrowserApp() {
   window.addEventListener("online", () => schedule(100));
   window.addEventListener("focus", () => schedule(250));
   window.addEventListener("pageshow", () => schedule(250));
+  window.addEventListener("pagehide", () => runSync());
   document.addEventListener("visibilitychange", () => {
-    schedule(document.visibilityState === "visible" ? 250 : BACKGROUND_SYNC_DELAY);
+    if (document.visibilityState === "visible") {
+      schedule(250);
+      watchLocalProgress();
+    } else {
+      runSync();
+    }
   });
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", () => {
@@ -693,6 +736,7 @@ async function startBrowserApp() {
       });
     });
   }
+  watchLocalProgress();
   runSync();
 }
 
@@ -709,4 +753,5 @@ export {
   nextSyncDelay,
   normalizeWord,
   personalKeyFromInput,
+  progressSignature,
 };

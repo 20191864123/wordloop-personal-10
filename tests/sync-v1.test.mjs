@@ -10,6 +10,7 @@ import {
   deriveCredentials,
   encryptPayload,
   personalKeyFromInput,
+  progressSignature,
 } from "../sync-v1.js";
 
 const root = new URL("../", import.meta.url);
@@ -36,9 +37,23 @@ test("loads the cloud sync layer before WordLoop", async () => {
   assert.match(sync, /复制三端同步链接/);
   assert.match(sync, /立即同步三台设备/);
   assert.match(sync, /FOREGROUND_SYNC_DELAY = 5000/);
+  assert.match(sync, /LOCAL_WATCH_DELAY = 750/);
+  assert.match(sync, /pagehide/);
+  assert.match(sync, /rerunRequested/);
   assert.match(sync, /serviceWorker\.register\("\.\/sw\.js"\)/);
   assert.match(sync, /datasetFingerprint/);
   assert.match(sync, /AES-GCM/);
+});
+
+test("detects local deletion and list changes for immediate handoff sync", () => {
+  assert.notEqual(
+    progressSignature({ deletedWords: ["coverage"], activeList: 1, showMeaning: true }),
+    progressSignature({ deletedWords: ["coverage", "stir"], activeList: 1, showMeaning: true }),
+  );
+  assert.notEqual(
+    progressSignature({ deletedWords: ["coverage"], activeList: 1, showMeaning: true }),
+    progressSignature({ deletedWords: ["coverage"], activeList: 2, showMeaning: true }),
+  );
 });
 
 test("converts an iPhone remaining-word backup into authoritative deletions", () => {
