@@ -1,8 +1,8 @@
-const CACHE_NAME = "wordloop-personal-shell-20260811-14";
+const CACHE_NAME = "wordloop-personal-shell-20260811-15";
 const SHELL_FILES = [
   "./",
   "./index.html",
-  "./sync-v1.js?v=20260811-14",
+  "./sync-v1.js?v=20260811-15",
   "./assets/index-DiX3UPkj.js",
   "./assets/index-9xAbc2uX.css",
   "./manifest.webmanifest",

@@ -12,7 +12,7 @@ import {
   deriveCredentials,
   encryptPayload,
   initializeMeta,
-  initialCloudRestoreNeeded,
+  cloudHydrationReloadNeeded,
   mergeDeletedWords,
   personalKeyFromInput,
   progressSignature,
@@ -54,7 +54,7 @@ test("loads the cloud sync layer before WordLoop", async () => {
   assert.match(sync, /installReadingPositionPersistence/);
   assert.match(sync, /installFullListPreloader/);
   assert.match(sync, /installShareableAddress/);
-  assert.match(sync, /reloadAfterInitialCloudRestore/);
+  assert.match(sync, /reloadAfterCloudHydration/);
   assert.match(sync, /meta\.syncId = credentials\.syncId/);
   assert.match(sync, /navigator\.share/);
   assert.match(sync, /link\.hash = `key=\$\{personalKey\}`/);
@@ -67,7 +67,7 @@ test("loads the cloud sync layer before WordLoop", async () => {
   assert.match(sync, /document\.querySelector\("\.bottom-summary"\)/);
   assert.match(sync, /删除：右侧/);
   assert.match(sync, /button\.textContent !== text/);
-  assert.match(sync, /SYNC_POLICY_VERSION = 4/);
+  assert.match(sync, /SYNC_POLICY_VERSION = 5/);
   assert.match(sync, /ensureMonotonicSnapshot/);
   assert.match(sync, /installExplicitRestoreBridge/);
   assert.match(sync, /SYNC_LEADER_LEASE/);
@@ -94,10 +94,9 @@ test("detects local deletion and list changes for immediate handoff sync", () =>
   );
 });
 
-test("new devices reload once after receiving their first cloud deletion snapshot", () => {
-  assert.equal(initialCloudRestoreNeeded(false, new Set(), new Set(["coverage"])), true);
-  assert.equal(initialCloudRestoreNeeded(true, new Set(), new Set(["coverage"])), false);
-  assert.equal(initialCloudRestoreNeeded(false, new Set(["coverage"]), new Set(["coverage", "stir"])), false);
+test("an empty device reloads after hydrating cloud deletions even with a stale cursor history", () => {
+  assert.equal(cloudHydrationReloadNeeded(new Set(), new Set(["coverage"])), true);
+  assert.equal(cloudHydrationReloadNeeded(new Set(["coverage"]), new Set(["coverage", "stir"])), false);
 });
 
 test("converts an iPhone remaining-word backup into authoritative deletions", () => {
@@ -200,7 +199,7 @@ test("policy upgrade drops queued legacy restores and replays from the beginning
       lastObservedDeleted: ["coverage"],
     },
   );
-  assert.equal(upgraded.syncPolicyVersion, 4);
+  assert.equal(upgraded.syncPolicyVersion, 5);
   assert.equal(upgraded.cursor, 0);
   assert.ok(upgraded.pending.every((operation) => operation.deleted || operation.explicitRestore === true));
   assert.ok(upgraded.pending.some((operation) => operation.word === "coverage" && operation.deleted));

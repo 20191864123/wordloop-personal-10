@@ -5,7 +5,7 @@ const PERSONAL_KEY = "personal-key";
 const LIBRARY_KEY = "library";
 const SYNC_META_KEY = "cloud-sync-v1";
 const SYNC_API_URL = "https://wordloop-sync.wordloop-20191864123.workers.dev/v1/sync";
-const SYNC_POLICY_VERSION = 4;
+const SYNC_POLICY_VERSION = 5;
 const MAX_BATCH = 500;
 const FOREGROUND_SYNC_DELAY = 5000;
 const BACKGROUND_SYNC_DELAY = 60000;
@@ -274,8 +274,8 @@ function sameWords(first, second) {
   return true;
 }
 
-function initialCloudRestoreNeeded(hasSyncedOnce, currentWords, mergedWords) {
-  return !hasSyncedOnce && currentWords.size === 0 && mergedWords.size > 0;
+function cloudHydrationReloadNeeded(currentWords, mergedWords) {
+  return currentWords.size === 0 && mergedWords.size > 0;
 }
 
 function deletedWordsFromRemaining(libraryWords, remainingWords) {
@@ -963,7 +963,6 @@ async function runSync(forceLeadership = false) {
     let progress = initialProgress;
     let meta = observeLocalChanges(progress, await initializeMeta(progress, compatibleSavedMeta));
     meta.syncId = credentials.syncId;
-    const hasSyncedOnceAtStart = Boolean(meta.hasSyncedOnce);
     meta = await ensureMonotonicSnapshot(progress, meta);
     await writeLocalEntries([[SYNC_META_KEY, meta]]);
     setStatus("syncing");
@@ -1022,11 +1021,7 @@ async function runSync(forceLeadership = false) {
     ]);
     const mergedWords = mergeDeletedWords(currentWords, protectedDeletedWords, remoteOperations, meta.pending);
     const wordsChanged = !sameWords(currentWords, mergedWords);
-    const reloadAfterInitialCloudRestore = initialCloudRestoreNeeded(
-      hasSyncedOnceAtStart,
-      currentWords,
-      mergedWords,
-    );
+    const reloadAfterCloudHydration = cloudHydrationReloadNeeded(currentWords, mergedWords);
 
     if (sentUi) meta.uiDirty = false;
     if (!meta.uiDirty && latestUiState && Number(latestUiState.revision) > Number(meta.uiRevision || 0)) {
@@ -1060,7 +1055,7 @@ async function runSync(forceLeadership = false) {
     syncedDeletedCount = mergedWords.size;
     setStatus("synced");
     schedule(nextSyncDelay());
-    if (reloadAfterInitialCloudRestore) {
+    if (reloadAfterCloudHydration) {
       window.setTimeout(() => location.reload(), 120);
     }
     return "synced";
@@ -1081,7 +1076,7 @@ async function applyCloudSnapshotBeforeApp() {
   if (!progress || !meta?.applyOnNextLoad || !Array.isArray(meta.appliedDeletedWords)) return;
   if (meta.syncPolicyVersion !== SYNC_POLICY_VERSION) {
     // Never apply a snapshot written by the legacy client that could contain
-    // accidental restores. Policy 3 replays the encrypted event history safely.
+    // accidental restores. The current policy replays encrypted history safely.
     meta.applyOnNextLoad = false;
     delete meta.appliedDeletedWords;
     await writeLocalEntries([[SYNC_META_KEY, meta]]);
@@ -1264,7 +1259,7 @@ export {
   encryptPayload,
   importOldProgress,
   initializeMeta,
-  initialCloudRestoreNeeded,
+  cloudHydrationReloadNeeded,
   mergeDeletedWords,
   nextSyncDelay,
   normalizeWord,
