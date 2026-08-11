@@ -58,7 +58,7 @@ test("loads the cloud sync layer before WordLoop", async () => {
   assert.match(sync, /document\.querySelector\("\.bottom-summary"\)/);
   assert.match(sync, /删除：右侧/);
   assert.match(sync, /button\.textContent !== text/);
-  assert.match(sync, /SYNC_POLICY_VERSION = 3/);
+  assert.match(sync, /SYNC_POLICY_VERSION = 4/);
   assert.match(sync, /ensureMonotonicSnapshot/);
   assert.match(sync, /installExplicitRestoreBridge/);
   assert.match(sync, /SYNC_LEADER_LEASE/);
@@ -184,7 +184,7 @@ test("policy upgrade drops queued legacy restores and replays from the beginning
       lastObservedDeleted: ["coverage"],
     },
   );
-  assert.equal(upgraded.syncPolicyVersion, 3);
+  assert.equal(upgraded.syncPolicyVersion, 4);
   assert.equal(upgraded.cursor, 0);
   assert.ok(upgraded.pending.every((operation) => operation.deleted || operation.explicitRestore === true));
   assert.ok(upgraded.pending.some((operation) => operation.word === "coverage" && operation.deleted));
@@ -195,14 +195,24 @@ test("protected cloud snapshot survives stale local progress", () => {
   assert.deepEqual([...result], ["coverage", "stir"]);
 });
 
-test("an explicit cloud undo can restore a deleted word", () => {
+test("an explicit cloud undo can restore a word not locally deleted", () => {
+  const result = mergeDeletedWords(
+    [],
+    ["coverage"],
+    [{ word: "coverage", deleted: false, explicitRestore: true }],
+    [],
+  );
+  assert.deepEqual([...result], []);
+});
+
+test("a stale cloud restore cannot undo this device's deletion", () => {
   const result = mergeDeletedWords(
     ["coverage"],
     ["coverage"],
     [{ word: "coverage", deleted: false, explicitRestore: true }],
     [],
   );
-  assert.deepEqual([...result], []);
+  assert.deepEqual([...result], ["coverage"]);
 });
 
 test("accepts only a valid personal link or key", () => {

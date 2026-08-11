@@ -5,7 +5,7 @@ const PERSONAL_KEY = "personal-key";
 const LIBRARY_KEY = "library";
 const SYNC_META_KEY = "cloud-sync-v1";
 const SYNC_API_URL = "https://wordloop-sync.wordloop-20191864123.workers.dev/v1/sync";
-const SYNC_POLICY_VERSION = 3;
+const SYNC_POLICY_VERSION = 4;
 const MAX_BATCH = 500;
 const FOREGROUND_SYNC_DELAY = 5000;
 const BACKGROUND_SYNC_DELAY = 60000;
@@ -257,8 +257,13 @@ function applyOperations(startingWords, operations) {
 }
 
 function mergeDeletedWords(currentWords, protectedWords, remoteOperations, pendingOperations) {
-  let result = applyOperations(new Set([...currentWords, ...protectedWords]), remoteOperations);
+  const localWords = new Set(currentWords);
+  let result = applyOperations(new Set([...localWords, ...protectedWords]), remoteOperations);
   result = applyOperations(result, pendingOperations);
+  // A cloud snapshot may add deletions, but it must never silently restore a
+  // word already deleted on this device. A local Undo removes the word from
+  // localWords first and is still carried by an explicit pending restore.
+  for (const word of localWords) result.add(word);
   return result;
 }
 
@@ -1034,7 +1039,12 @@ async function applyCloudSnapshotBeforeApp() {
     await writeLocalEntries([[SYNC_META_KEY, meta]]);
     return;
   }
-  progress.deletedWords = [...new Set(meta.appliedDeletedWords.map(normalizeWord).filter(Boolean))].sort();
+  const localDeletedWords = Array.isArray(progress.deletedWords)
+    ? progress.deletedWords.map(normalizeWord).filter(Boolean)
+    : [];
+  progress.deletedWords = [
+    ...new Set([...localDeletedWords, ...meta.appliedDeletedWords.map(normalizeWord).filter(Boolean)]),
+  ].sort();
   meta.lastObservedDeleted = [...progress.deletedWords];
   meta.applyOnNextLoad = false;
   delete meta.appliedDeletedWords;
