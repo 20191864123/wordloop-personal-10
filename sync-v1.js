@@ -5,8 +5,11 @@ const PERSONAL_KEY = "personal-key";
 const LIBRARY_KEY = "library";
 const SYNC_META_KEY = "cloud-sync-v1";
 const SYNC_API_URL = "https://wordloop-sync.wordloop-20191864123.workers.dev/v1/sync";
-const SYNC_POLICY_VERSION = 5;
-const MAX_BATCH = 500;
+const SYNC_POLICY_VERSION = 6;
+const MAX_BATCH = 100;
+const MAX_SYNC_ROUNDS = 600;
+const SYNC_REQUEST_TIMEOUT = 20000;
+const CATCH_UP_RELOAD_MINIMUM = 25;
 const FOREGROUND_SYNC_DELAY = 5000;
 const BACKGROUND_SYNC_DELAY = 60000;
 const LOCAL_WATCH_DELAY = 750;
@@ -275,7 +278,8 @@ function sameWords(first, second) {
 }
 
 function cloudHydrationReloadNeeded(currentWords, mergedWords) {
-  return currentWords.size === 0 && mergedWords.size > 0;
+  const addedDeletionCount = Math.max(0, mergedWords.size - currentWords.size);
+  return addedDeletionCount > 0 && (currentWords.size === 0 || addedDeletionCount >= CATCH_UP_RELOAD_MINIMUM);
 }
 
 function deletedWordsFromRemaining(libraryWords, remainingWords) {
@@ -782,8 +786,11 @@ async function initializeMeta(progress, savedMeta) {
       };
     }
 
-    const snapshotOperations = await Promise.all(
-      [...new Set([...previousDeleted, ...deletedWords])].map(createMigrationOperation),
+    // Re-upload every locally protected deletion with fresh operation IDs.
+    // Earlier clients could finish the server writes but fail before saving
+    // their cursor, leaving other devices with an incomplete visible snapshot.
+    const snapshotOperations = [...new Set([...previousDeleted, ...deletedWords])].map((word) =>
+      createOperation(word, true),
     );
     const operationIds = new Set(pending.map((operation) => operation.opId));
     for (const operation of snapshotOperations) {
@@ -842,7 +849,12 @@ async function ensureMonotonicSnapshot(progress, meta) {
   ]);
   const uploadedSnapshot = new Set((meta.snapshotDeletedWords || []).map(normalizeWord));
   const pendingIds = new Set(meta.pending.map((operation) => operation.opId));
-  const missingWords = [...knownDeleted].filter(Boolean).filter((word) => !uploadedSnapshot.has(word));
+  const pendingDeletedWords = new Set(
+    meta.pending.filter((operation) => operation.deleted).map((operation) => normalizeWord(operation.word)),
+  );
+  const missingWords = [...knownDeleted]
+    .filter(Boolean)
+    .filter((word) => !uploadedSnapshot.has(word) && !pendingDeletedWords.has(word));
   const operations = await Promise.all(missingWords.map(createMigrationOperation));
   for (const operation of operations) {
     if (!pendingIds.has(operation.opId)) {
@@ -897,7 +909,7 @@ function installExplicitRestoreBridge() {
 
 async function postSync(credentials, cursor, pending, uiState) {
   const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), 8000);
+  const timeout = window.setTimeout(() => controller.abort(), SYNC_REQUEST_TIMEOUT);
   try {
     const operations = await Promise.all(
       pending.map(async (operation) => ({
@@ -975,7 +987,7 @@ async function runSync(forceLeadership = false) {
     let latestUiState = null;
     let sentUi = false;
 
-    for (let round = 0; round < 80; round += 1) {
+    for (let round = 0; round < MAX_SYNC_ROUNDS; round += 1) {
       const sent = pendingQueue.splice(0, MAX_BATCH);
       let uiState = null;
       if (!sentUi && meta.uiDirty && progress) {
@@ -1000,7 +1012,7 @@ async function runSync(forceLeadership = false) {
       cursor = Math.max(cursor, Number(response.cursor) || cursor);
       if (response.uiState) latestUiState = response.uiState;
       if (!response.hasMore && pendingQueue.length === 0) break;
-      if (round === 79) throw new Error("sync_round_limit");
+      if (round === MAX_SYNC_ROUNDS - 1) throw new Error("sync_round_limit");
     }
 
     progress = (await readLocal(PROGRESS_KEY)) || progress || {
@@ -1056,7 +1068,7 @@ async function runSync(forceLeadership = false) {
     setStatus("synced");
     schedule(nextSyncDelay());
     if (reloadAfterCloudHydration) {
-      window.setTimeout(() => location.reload(), 120);
+      window.setTimeout(reloadPreservingReadingPosition, 120);
     }
     return "synced";
   } catch (error) {

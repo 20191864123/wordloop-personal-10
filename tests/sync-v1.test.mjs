@@ -67,7 +67,11 @@ test("loads the cloud sync layer before WordLoop", async () => {
   assert.match(sync, /document\.querySelector\("\.bottom-summary"\)/);
   assert.match(sync, /删除：右侧/);
   assert.match(sync, /button\.textContent !== text/);
-  assert.match(sync, /SYNC_POLICY_VERSION = 5/);
+  assert.match(sync, /SYNC_POLICY_VERSION = 6/);
+  assert.match(sync, /MAX_BATCH = 100/);
+  assert.match(sync, /MAX_SYNC_ROUNDS = 600/);
+  assert.match(sync, /SYNC_REQUEST_TIMEOUT = 20000/);
+  assert.match(sync, /CATCH_UP_RELOAD_MINIMUM = 25/);
   assert.match(sync, /ensureMonotonicSnapshot/);
   assert.match(sync, /installExplicitRestoreBridge/);
   assert.match(sync, /SYNC_LEADER_LEASE/);
@@ -97,6 +101,9 @@ test("detects local deletion and list changes for immediate handoff sync", () =>
 test("an empty device reloads after hydrating cloud deletions even with a stale cursor history", () => {
   assert.equal(cloudHydrationReloadNeeded(new Set(), new Set(["coverage"])), true);
   assert.equal(cloudHydrationReloadNeeded(new Set(["coverage"]), new Set(["coverage", "stir"])), false);
+  const current = new Set(Array.from({ length: 10 }, (_, index) => `current-${index}`));
+  const caughtUp = new Set([...current, ...Array.from({ length: 25 }, (_, index) => `remote-${index}`)]);
+  assert.equal(cloudHydrationReloadNeeded(current, caughtUp), true);
 });
 
 test("converts an iPhone remaining-word backup into authoritative deletions", () => {
@@ -199,10 +206,11 @@ test("policy upgrade drops queued legacy restores and replays from the beginning
       lastObservedDeleted: ["coverage"],
     },
   );
-  assert.equal(upgraded.syncPolicyVersion, 5);
+  assert.equal(upgraded.syncPolicyVersion, 6);
   assert.equal(upgraded.cursor, 0);
   assert.ok(upgraded.pending.every((operation) => operation.deleted || operation.explicitRestore === true));
   assert.ok(upgraded.pending.some((operation) => operation.word === "coverage" && operation.deleted));
+  assert.ok(upgraded.pending.some((operation) => operation.word === "coverage" && !operation.opId.startsWith("migration_")));
 });
 
 test("protected cloud snapshot survives stale local progress", () => {
