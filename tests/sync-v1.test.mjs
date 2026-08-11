@@ -16,6 +16,7 @@ import {
   mergeDeletedWords,
   personalKeyFromInput,
   progressSignature,
+  reconcilePrunedLibrary,
 } from "../sync-v1.js";
 
 const root = new URL("../", import.meta.url);
@@ -67,11 +68,13 @@ test("loads the cloud sync layer before WordLoop", async () => {
   assert.match(sync, /document\.querySelector\("\.bottom-summary"\)/);
   assert.match(sync, /删除：右侧/);
   assert.match(sync, /button\.textContent !== text/);
-  assert.match(sync, /SYNC_POLICY_VERSION = 6/);
+  assert.match(sync, /SYNC_POLICY_VERSION = 7/);
   assert.match(sync, /MAX_BATCH = 100/);
   assert.match(sync, /MAX_SYNC_ROUNDS = 600/);
   assert.match(sync, /SYNC_REQUEST_TIMEOUT = 20000/);
   assert.match(sync, /CATCH_UP_RELOAD_MINIMUM = 25/);
+  assert.match(sync, /repairPrunedLibraryBeforeApp/);
+  assert.match(sync, /PERSONAL_MANIFEST_URL/);
   assert.match(sync, /ensureMonotonicSnapshot/);
   assert.match(sync, /installExplicitRestoreBridge/);
   assert.match(sync, /SYNC_LEADER_LEASE/);
@@ -112,6 +115,31 @@ test("converts an iPhone remaining-word backup into authoritative deletions", ()
     [{ word: "stir" }, { word: "fault" }],
   );
   assert.deepEqual(deleted, ["coverage", "adept"]);
+});
+
+test("repairs a pruned same-fingerprint library by converting absent words into deletions", () => {
+  const canonical = {
+    datasetFingerprint: "fingerprint-v1",
+    words: [
+      { word: "coverage" },
+      { word: "stir" },
+      { word: "adept" },
+      { word: "fault" },
+    ],
+  };
+  const current = {
+    datasetFingerprint: "fingerprint-v1",
+    words: [{ word: "stir" }, { word: "fault" }],
+  };
+  const result = reconcilePrunedLibrary(current, canonical, {
+    deletedWords: ["fault"],
+    activeList: 4,
+    showMeaning: true,
+  });
+  assert.equal(result.repaired, true);
+  assert.deepEqual(result.addedDeletedWords, ["coverage", "adept"]);
+  assert.deepEqual(result.progress.deletedWords, ["adept", "coverage", "fault"]);
+  assert.equal(result.library.words.length, 4);
 });
 
 test("ships an offline shell without caching the cross-origin sync API", async () => {
@@ -206,7 +234,7 @@ test("policy upgrade drops queued legacy restores and replays from the beginning
       lastObservedDeleted: ["coverage"],
     },
   );
-  assert.equal(upgraded.syncPolicyVersion, 6);
+  assert.equal(upgraded.syncPolicyVersion, 7);
   assert.equal(upgraded.cursor, 0);
   assert.ok(upgraded.pending.every((operation) => operation.deleted || operation.explicitRestore === true));
   assert.ok(upgraded.pending.some((operation) => operation.word === "coverage" && operation.deleted));

@@ -5,7 +5,8 @@ const PERSONAL_KEY = "personal-key";
 const LIBRARY_KEY = "library";
 const SYNC_META_KEY = "cloud-sync-v1";
 const SYNC_API_URL = "https://wordloop-sync.wordloop-20191864123.workers.dev/v1/sync";
-const SYNC_POLICY_VERSION = 6;
+const PERSONAL_MANIFEST_URL = "./personal/manifest.json";
+const SYNC_POLICY_VERSION = 7;
 const MAX_BATCH = 100;
 const MAX_SYNC_ROUNDS = 600;
 const SYNC_REQUEST_TIMEOUT = 20000;
@@ -178,6 +179,129 @@ function applyMeaningPatchToLibrary(library, patch) {
     changed,
     libraryFound: true,
   };
+}
+
+function reconcilePrunedLibrary(currentLibrary, canonicalLibrary, progress) {
+  if (
+    !Array.isArray(currentLibrary?.words) ||
+    !Array.isArray(canonicalLibrary?.words) ||
+    !currentLibrary.datasetFingerprint ||
+    currentLibrary.datasetFingerprint !== canonicalLibrary.datasetFingerprint ||
+    canonicalLibrary.words.length <= currentLibrary.words.length
+  ) {
+    return { repaired: false, library: currentLibrary, progress, addedDeletedWords: [] };
+  }
+
+  const canonicalWords = canonicalLibrary.words.map((item) => normalizeWord(item?.word)).filter(Boolean);
+  const canonicalWordSet = new Set(canonicalWords);
+  const currentWordSet = new Set(
+    currentLibrary.words.map((item) => normalizeWord(item?.word)).filter(Boolean),
+  );
+  if (currentWordSet.size !== currentLibrary.words.length) {
+    return { repaired: false, library: currentLibrary, progress, addedDeletedWords: [] };
+  }
+  for (const word of currentWordSet) {
+    if (!canonicalWordSet.has(word)) {
+      return { repaired: false, library: currentLibrary, progress, addedDeletedWords: [] };
+    }
+  }
+
+  const addedDeletedWords = canonicalWords.filter((word) => !currentWordSet.has(word));
+  const existingDeletedWords = (Array.isArray(progress?.deletedWords) ? progress.deletedWords : [])
+    .map(normalizeWord)
+    .filter((word) => word && canonicalWordSet.has(word));
+  const deletedWords = [...new Set([...existingDeletedWords, ...addedDeletedWords])].sort();
+  return {
+    repaired: true,
+    library: canonicalLibrary,
+    progress: {
+      ...(progress || {}),
+      fingerprint: canonicalLibrary.datasetFingerprint,
+      deletedWords,
+      activeList: Math.min(10, Math.max(1, Number(progress?.activeList) || 1)),
+      showMeaning: progress?.showMeaning !== false,
+    },
+    addedDeletedWords,
+  };
+}
+
+async function fetchJsonWithTimeout(url, timeoutMs = 15000) {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { cache: "no-store", signal: controller.signal });
+    if (!response.ok) throw new Error(`fetch_http_${response.status}`);
+    return response.json();
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
+async function decryptCanonicalLibrary(envelope, personalKey) {
+  if (envelope?.format !== "wordloop-encrypted-library-v1" || envelope?.algorithm !== "AES-256-GCM") {
+    throw new Error("invalid_personal_library_envelope");
+  }
+  const keyBytes = base64UrlToBytes(personalKey);
+  if (keyBytes.byteLength !== 32) throw new Error("invalid_personal_library_key");
+  const key = await crypto.subtle.importKey("raw", keyBytes, "AES-GCM", false, ["decrypt"]);
+  const ciphertext = base64UrlToBytes(envelope.ciphertext);
+  const tag = base64UrlToBytes(envelope.tag);
+  const sealed = new Uint8Array(ciphertext.byteLength + tag.byteLength);
+  sealed.set(ciphertext);
+  sealed.set(tag, ciphertext.byteLength);
+  const plaintext = new Uint8Array(
+    await crypto.subtle.decrypt(
+      {
+        name: "AES-GCM",
+        iv: base64UrlToBytes(envelope.iv),
+        additionalData: encoder.encode(envelope.aad),
+        tagLength: 128,
+      },
+      key,
+      sealed,
+    ),
+  );
+  return { library: JSON.parse(decoder.decode(plaintext)), plaintext };
+}
+
+async function repairPrunedLibraryBeforeApp() {
+  const [currentLibrary, progress, personalKey] = await Promise.all([
+    readLocal(LIBRARY_KEY),
+    readLocal(PROGRESS_KEY),
+    currentPersonalKey(),
+  ]);
+  if (!personalKey || !Array.isArray(currentLibrary?.words) || currentLibrary.words.length === 0) {
+    return { repaired: false, addedDeletedCount: 0 };
+  }
+
+  const manifest = await fetchJsonWithTimeout(PERSONAL_MANIFEST_URL);
+  if (
+    manifest?.format !== "wordloop-personal-manifest-v1" ||
+    currentLibrary.datasetFingerprint !== manifest.datasetFingerprint ||
+    currentLibrary.words.length >= Number(manifest.totalWords)
+  ) {
+    return { repaired: false, addedDeletedCount: 0 };
+  }
+
+  const envelopeUrl = new URL(manifest.encryptedFile, location.href);
+  if (envelopeUrl.origin !== location.origin) throw new Error("invalid_personal_library_origin");
+  const decrypted = await decryptCanonicalLibrary(await fetchJsonWithTimeout(envelopeUrl.href), personalKey);
+  const plaintextHash = bytesToHex(new Uint8Array(await crypto.subtle.digest("SHA-256", decrypted.plaintext)));
+  if (
+    plaintextHash !== manifest.plaintextSha256 ||
+    decrypted.library?.datasetFingerprint !== manifest.datasetFingerprint ||
+    decrypted.library?.words?.length !== Number(manifest.totalWords)
+  ) {
+    throw new Error("invalid_personal_library_integrity");
+  }
+
+  const reconciled = reconcilePrunedLibrary(currentLibrary, decrypted.library, progress);
+  if (!reconciled.repaired) return { repaired: false, addedDeletedCount: 0 };
+  await writeLocalEntries([
+    [LIBRARY_KEY, reconciled.library],
+    [PROGRESS_KEY, reconciled.progress],
+  ]);
+  return { repaired: true, addedDeletedCount: reconciled.addedDeletedWords.length };
 }
 
 async function applyMeaningPatchBeforeApp() {
@@ -1217,6 +1341,11 @@ function installFullListPreloader() {
 async function startBrowserApp() {
   applyDeleteSide();
   try {
+    await repairPrunedLibraryBeforeApp();
+  } catch (error) {
+    console.info("WordLoop旧版剩余词库迁移暂不可用，将保留本机数据。", error instanceof Error ? error.message : error);
+  }
+  try {
     await applyCloudSnapshotBeforeApp();
   } catch (error) {
     console.info("WordLoop启动前进度恢复失败，将继续使用本机数据。", error instanceof Error ? error.message : error);
@@ -1277,4 +1406,5 @@ export {
   normalizeWord,
   personalKeyFromInput,
   progressSignature,
+  reconcilePrunedLibrary,
 };
