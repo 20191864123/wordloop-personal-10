@@ -47,9 +47,13 @@ test("loads the cloud sync layer before WordLoop", async () => {
   assert.match(sync, /LOCAL_WATCH_DELAY = 750/);
   assert.match(sync, /pagehide/);
   assert.match(sync, /rerunRequested/);
-  assert.match(sync, /renderIncomingProgressNotice/);
   assert.match(sync, /reloadPreservingReadingPosition/);
   assert.match(sync, /restoreReadingPosition/);
+  assert.match(sync, /wordloop-reading-position-persistent-v1/);
+  assert.match(sync, /installReadingPositionPersistence/);
+  assert.match(sync, /installFastScrollControl/);
+  assert.match(sync, /长按快速向下滚动/);
+  assert.doesNotMatch(sync, /renderIncomingProgressNotice|cloud-progress-notice/);
   assert.doesNotMatch(sync, /wordsChanged[^\n]*location\.reload/);
   assert.match(sync, /wordloop-delete-side-v1/);
   assert.match(sync, /renderDeleteSideToggle/);
@@ -68,7 +72,8 @@ test("loads the cloud sync layer before WordLoop", async () => {
   assert.match(sync, /personal\/meanings-v1\.json/);
   assert.match(sync, /scheduleMeaningPatchAfterApp/);
   assert.doesNotMatch(sync, /Promise\.all\(\[applyCloudSnapshotBeforeApp\(\), applyMeaningPatchBeforeApp\(\)\]\)/);
-  assert.match(sync, /button\.remove\(\), 8000/);
+  assert.match(html, /fast-scroll-control/);
+  assert.match(html, /content-visibility: auto/);
   assert.match(sync, /datasetFingerprint/);
   assert.match(sync, /AES-GCM/);
 });

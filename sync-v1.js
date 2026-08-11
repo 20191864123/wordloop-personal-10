@@ -11,6 +11,7 @@ const FOREGROUND_SYNC_DELAY = 5000;
 const BACKGROUND_SYNC_DELAY = 60000;
 const LOCAL_WATCH_DELAY = 750;
 const READING_POSITION_KEY = "wordloop-reading-position-v1";
+const PERSISTED_READING_POSITION_KEY = "wordloop-reading-position-persistent-v1";
 const DELETE_SIDE_KEY = "wordloop-delete-side-v1";
 const SYNC_LEADER_KEY = "wordloop-cloud-leader-v1";
 const SYNC_LEADER_LEASE = 12000;
@@ -1014,7 +1015,6 @@ async function runSync(forceLeadership = false) {
     syncedDeletedCount = mergedWords.size;
     setStatus("synced");
     schedule(nextSyncDelay());
-    if (wordsChanged && document.readyState !== "loading") renderIncomingProgressNotice();
     return "synced";
   } catch (error) {
     failureCount += 1;
@@ -1059,13 +1059,13 @@ function captureReadingPosition() {
     const rows = [...document.querySelectorAll(".word-row")];
     const anchor = rows.find((row) => row.getBoundingClientRect().bottom > 72);
     const word = anchor?.querySelector(".word-main strong")?.textContent?.trim() || "";
+    if (!word) return;
     const offset = anchor ? Math.max(0, anchor.getBoundingClientRect().top) : 0;
-    sessionStorage.setItem(
-      READING_POSITION_KEY,
-      JSON.stringify({ word, offset, scrollTop: window.scrollY, savedAt: Date.now() }),
-    );
+    const saved = JSON.stringify({ word, offset, scrollTop: window.scrollY, savedAt: Date.now() });
+    sessionStorage.setItem(READING_POSITION_KEY, saved);
+    localStorage.setItem(PERSISTED_READING_POSITION_KEY, saved);
   } catch {
-    // Some private browsing modes may not expose sessionStorage.
+    // Some private browsing modes may not expose web storage.
   }
 }
 
@@ -1074,28 +1074,19 @@ function reloadPreservingReadingPosition() {
   location.reload();
 }
 
-function renderIncomingProgressNotice() {
-  let button = document.querySelector(".cloud-progress-notice");
-  if (button) return;
-  button = document.createElement("button");
-  button.type = "button";
-  button.className = "cloud-progress-notice";
-  button.textContent = "其他设备进度已收到 · 点此更新";
-  button.setAttribute("aria-label", "更新其他设备的WordLoop进度");
-  button.addEventListener("click", reloadPreservingReadingPosition);
-  document.body.append(button);
-  window.setTimeout(() => button.remove(), 8000);
-}
-
 function restoreReadingPosition() {
   let saved;
   try {
-    saved = JSON.parse(sessionStorage.getItem(READING_POSITION_KEY) || "null");
+    saved = JSON.parse(
+      sessionStorage.getItem(READING_POSITION_KEY) ||
+        localStorage.getItem(PERSISTED_READING_POSITION_KEY) ||
+        "null",
+    );
     sessionStorage.removeItem(READING_POSITION_KEY);
   } catch {
     return;
   }
-  if (!saved || Date.now() - Number(saved.savedAt || 0) > 120000) return;
+  if (!saved || Date.now() - Number(saved.savedAt || 0) > 30 * 24 * 60 * 60 * 1000) return;
 
   const restore = (attempt = 0) => {
     const rows = [...document.querySelectorAll(".word-row")];
@@ -1108,14 +1099,151 @@ function restoreReadingPosition() {
       return;
     }
     const loadMore = document.querySelector(".load-more");
-    if (loadMore instanceof HTMLButtonElement && attempt < 30) {
+    if (loadMore instanceof HTMLButtonElement && attempt < 60) {
       loadMore.click();
       window.setTimeout(() => restore(attempt + 1), 80);
+      return;
+    }
+    if (rows.length === 0 && attempt < 80) {
+      window.setTimeout(() => restore(attempt + 1), 150);
       return;
     }
     window.scrollTo({ top: Math.max(0, Number(saved.scrollTop) || 0), behavior: "auto" });
   };
   window.setTimeout(restore, 250);
+}
+
+function installReadingPositionPersistence() {
+  if ("scrollRestoration" in history) history.scrollRestoration = "manual";
+  let saveTimer = 0;
+  const scheduleSave = () => {
+    window.clearTimeout(saveTimer);
+    saveTimer = window.setTimeout(captureReadingPosition, 260);
+  };
+  window.addEventListener("scroll", scheduleSave, { passive: true });
+  window.addEventListener("pagehide", captureReadingPosition);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") captureReadingPosition();
+  });
+}
+
+function installFastScrollControl() {
+  if (document.querySelector(".fast-scroll-control")) return;
+  const control = document.createElement("nav");
+  control.className = "fast-scroll-control";
+  control.dataset.ready = "false";
+  control.setAttribute("aria-label", "快速滚动单词列表");
+
+  const up = document.createElement("button");
+  up.type = "button";
+  up.className = "fast-scroll-arrow";
+  up.textContent = "▲";
+  up.setAttribute("aria-label", "长按快速向上滚动");
+
+  const track = document.createElement("div");
+  track.className = "fast-scroll-track";
+  const thumb = document.createElement("button");
+  thumb.type = "button";
+  thumb.className = "fast-scroll-thumb";
+  thumb.textContent = "↕";
+  thumb.setAttribute("aria-label", "拖动快速滚动");
+  track.append(thumb);
+
+  const down = document.createElement("button");
+  down.type = "button";
+  down.className = "fast-scroll-arrow";
+  down.textContent = "▼";
+  down.setAttribute("aria-label", "长按快速向下滚动");
+  control.append(up, track, down);
+  document.body.append(control);
+
+  const updateThumb = () => {
+    const rowsReady = Boolean(document.querySelector(".word-row"));
+    control.dataset.ready = String(rowsReady);
+    const maximum = Math.max(1, document.documentElement.scrollHeight - window.innerHeight);
+    const travel = Math.max(0, track.clientHeight - thumb.offsetHeight);
+    const top = Math.min(travel, Math.max(0, (window.scrollY / maximum) * travel));
+    thumb.style.transform = `translateY(${top}px)`;
+  };
+
+  let holdTimer = 0;
+  let frame = 0;
+  let holdStartedAt = 0;
+  let holdDirection = 0;
+  const stopHolding = (pageStep = false) => {
+    window.clearTimeout(holdTimer);
+    window.cancelAnimationFrame(frame);
+    if (pageStep && holdDirection) {
+      window.scrollBy({ top: holdDirection * window.innerHeight * 0.72, behavior: "smooth" });
+    }
+    holdDirection = 0;
+  };
+  const continuousStep = (now) => {
+    if (!holdDirection) return;
+    const heldFor = Math.max(0, now - holdStartedAt);
+    const pixels = Math.min(72, 12 + heldFor / 45);
+    window.scrollBy({ top: holdDirection * pixels, behavior: "auto" });
+    if (
+      holdDirection > 0 &&
+      document.documentElement.scrollHeight - window.scrollY - window.innerHeight < 900
+    ) {
+      const loadMore = document.querySelector(".load-more");
+      if (loadMore instanceof HTMLButtonElement) loadMore.click();
+    }
+    frame = window.requestAnimationFrame(continuousStep);
+  };
+  const startHolding = (direction, event) => {
+    event.preventDefault();
+    stopHolding(false);
+    holdDirection = direction;
+    holdStartedAt = performance.now();
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    holdTimer = window.setTimeout(() => {
+      frame = window.requestAnimationFrame(continuousStep);
+    }, 220);
+  };
+  for (const [button, direction] of [
+    [up, -1],
+    [down, 1],
+  ]) {
+    button.addEventListener("pointerdown", (event) => startHolding(direction, event));
+    button.addEventListener("pointerup", () => stopHolding(performance.now() - holdStartedAt < 220));
+    button.addEventListener("pointercancel", () => stopHolding(false));
+    button.addEventListener("contextmenu", (event) => event.preventDefault());
+  }
+
+  let dragging = false;
+  const dragTo = (event) => {
+    const bounds = track.getBoundingClientRect();
+    const travel = Math.max(1, bounds.height - thumb.offsetHeight);
+    const ratio = Math.min(1, Math.max(0, (event.clientY - bounds.top - thumb.offsetHeight / 2) / travel));
+    const maximum = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+    window.scrollTo({ top: ratio * maximum, behavior: "auto" });
+  };
+  track.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    dragging = true;
+    track.setPointerCapture?.(event.pointerId);
+    dragTo(event);
+  });
+  track.addEventListener("pointermove", (event) => {
+    if (dragging) dragTo(event);
+  });
+  track.addEventListener("pointerup", () => {
+    dragging = false;
+  });
+  track.addEventListener("pointercancel", () => {
+    dragging = false;
+  });
+  track.addEventListener("contextmenu", (event) => event.preventDefault());
+
+  window.addEventListener("scroll", updateThumb, { passive: true });
+  window.addEventListener("resize", updateThumb);
+  new MutationObserver(updateThumb).observe(document.getElementById("root") || document.body, {
+    childList: true,
+    subtree: true,
+  });
+  updateThumb();
 }
 
 async function startBrowserApp() {
@@ -1130,6 +1258,8 @@ async function startBrowserApp() {
   // never leave the user stuck on “正在核对并更新词库”.
   scheduleMeaningPatchAfterApp();
   installExplicitRestoreBridge();
+  installReadingPositionPersistence();
+  installFastScrollControl();
   restoreReadingPosition();
   const observer = new MutationObserver(renderStatus);
   observer.observe(document.documentElement, { childList: true, subtree: true });
