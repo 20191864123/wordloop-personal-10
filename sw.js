@@ -1,8 +1,8 @@
-const CACHE_NAME = "wordloop-personal-shell-20260810-9";
+const CACHE_NAME = "wordloop-personal-shell-20260811-10";
 const SHELL_FILES = [
   "./",
   "./index.html",
-  "./sync-v1.js?v=20260810-9",
+  "./sync-v1.js?v=20260811-10",
   "./assets/index-DiX3UPkj.js",
   "./assets/index-9xAbc2uX.css",
   "./manifest.webmanifest",
@@ -12,6 +12,7 @@ const SHELL_FILES = [
   "./icon-512.png",
   "./personal/manifest.json",
   "./personal/library.enc.json",
+  "./personal/meanings-v1.json?v=20260811-10",
 ];
 
 self.addEventListener("install", (event) => {

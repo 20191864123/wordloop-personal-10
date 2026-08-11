@@ -14,6 +14,7 @@ const READING_POSITION_KEY = "wordloop-reading-position-v1";
 const DELETE_SIDE_KEY = "wordloop-delete-side-v1";
 const SYNC_LEADER_KEY = "wordloop-cloud-leader-v1";
 const SYNC_LEADER_LEASE = 12000;
+const MEANING_PATCH_URL = "./personal/meanings-v1.json?v=20260811-10";
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const tabId = crypto.randomUUID();
@@ -133,6 +134,77 @@ async function writeLocalEntries(entries) {
     };
     transaction.onerror = () => reject(transaction.error);
   });
+}
+
+function missingMeaning(value) {
+  const meaning = String(value || "").trim();
+  return meaning === "" || meaning === "暂无释义";
+}
+
+function applyMeaningPatchToLibrary(library, patch) {
+  if (!Array.isArray(library?.words) || library.words.length === 0) {
+    return { library, changed: 0, libraryFound: false };
+  }
+  if (
+    patch?.format !== "wordloop-meaning-patch-v1" ||
+    !Array.isArray(patch?.entries) ||
+    !patch.datasetFingerprint ||
+    patch.datasetFingerprint !== library.datasetFingerprint
+  ) {
+    throw new Error("释义补丁与当前词库版本不一致");
+  }
+
+  const entriesById = new Map(patch.entries.map((entry) => [String(entry.id), entry]));
+  let changed = 0;
+  const words = library.words.map((item) => {
+    if (!missingMeaning(item?.meaning)) return item;
+    const entry = entriesById.get(String(item?.id));
+    if (
+      !entry ||
+      normalizeWord(entry.word) !== normalizeWord(item?.word) ||
+      missingMeaning(entry.meaning)
+    ) {
+      return item;
+    }
+    changed += 1;
+    return { ...item, meaning: String(entry.meaning).trim() };
+  });
+  return {
+    library: changed > 0 ? { ...library, words } : library,
+    changed,
+    libraryFound: true,
+  };
+}
+
+async function applyMeaningPatchBeforeApp() {
+  const library = await readLocal(LIBRARY_KEY);
+  if (!Array.isArray(library?.words) || library.words.length === 0) {
+    return { libraryFound: false, changed: 0 };
+  }
+  const response = await fetch(MEANING_PATCH_URL, { cache: "no-store" });
+  if (!response.ok) throw new Error(`释义补丁下载失败：${response.status}`);
+  const result = applyMeaningPatchToLibrary(library, await response.json());
+  if (result.changed > 0) await writeLocalEntries([[LIBRARY_KEY, result.library]]);
+  return { libraryFound: true, changed: result.changed };
+}
+
+function scheduleMeaningPatchAfterApp(attempt = 0) {
+  window.setTimeout(async () => {
+    try {
+      const result = await applyMeaningPatchBeforeApp();
+      if (result.changed > 0) {
+        reloadPreservingReadingPosition();
+        return;
+      }
+      if (!result.libraryFound && attempt < 20) scheduleMeaningPatchAfterApp(attempt + 1);
+    } catch (error) {
+      if (attempt < 5) {
+        scheduleMeaningPatchAfterApp(attempt + 1);
+      } else {
+        console.info("WordLoop释义补丁暂未载入。", error instanceof Error ? error.message : error);
+      }
+    }
+  }, attempt === 0 ? 900 : 600);
 }
 
 function keyFromFragment() {
@@ -998,9 +1070,11 @@ function renderIncomingProgressNotice() {
   button = document.createElement("button");
   button.type = "button";
   button.className = "cloud-progress-notice";
-  button.textContent = "已收到其他设备进度 · 点此更新（不会跳回顶部）";
+  button.textContent = "其他设备进度已收到 · 点此更新";
+  button.setAttribute("aria-label", "更新其他设备的WordLoop进度");
   button.addEventListener("click", reloadPreservingReadingPosition);
   document.body.append(button);
+  window.setTimeout(() => button.remove(), 8000);
 }
 
 function restoreReadingPosition() {
@@ -1042,6 +1116,9 @@ async function startBrowserApp() {
     console.info("WordLoop启动前进度恢复失败，将继续使用本机数据。", error instanceof Error ? error.message : error);
   }
   await import("./assets/index-DiX3UPkj.js");
+  // Meaning updates run only after the app is usable, so a slow connection can
+  // never leave the user stuck on “正在核对并更新词库”.
+  scheduleMeaningPatchAfterApp();
   installExplicitRestoreBridge();
   restoreReadingPosition();
   const observer = new MutationObserver(renderStatus);
@@ -1076,6 +1153,7 @@ if (typeof window !== "undefined" && typeof indexedDB !== "undefined") startBrow
 
 export {
   acceptedCloudOperation,
+  applyMeaningPatchToLibrary,
   applyOperations,
   createMigrationOperation,
   decryptPayload,

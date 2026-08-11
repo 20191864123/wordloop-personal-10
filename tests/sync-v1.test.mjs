@@ -4,6 +4,7 @@ import test from "node:test";
 
 import {
   acceptedCloudOperation,
+  applyMeaningPatchToLibrary,
   applyOperations,
   createMigrationOperation,
   decryptPayload,
@@ -64,6 +65,10 @@ test("loads the cloud sync layer before WordLoop", async () => {
   assert.doesNotMatch(sync, /wordsChanged[^\n]*reloadPreservingReadingPosition/);
   assert.match(sync, /设备组/);
   assert.match(sync, /serviceWorker\.register\("\.\/sw\.js"\)/);
+  assert.match(sync, /personal\/meanings-v1\.json/);
+  assert.match(sync, /scheduleMeaningPatchAfterApp/);
+  assert.doesNotMatch(sync, /Promise\.all\(\[applyCloudSnapshotBeforeApp\(\), applyMeaningPatchBeforeApp\(\)\]\)/);
+  assert.match(sync, /button\.remove\(\), 8000/);
   assert.match(sync, /datasetFingerprint/);
   assert.match(sync, /AES-GCM/);
 });
@@ -90,8 +95,45 @@ test("converts an iPhone remaining-word backup into authoritative deletions", ()
 test("ships an offline shell without caching the cross-origin sync API", async () => {
   const worker = await readFile(new URL("sw.js", root), "utf8");
   assert.match(worker, /personal\/library\.enc\.json/);
+  assert.match(worker, /personal\/meanings-v1\.json/);
   assert.match(worker, /url\.origin !== self\.location\.origin/);
   assert.doesNotMatch(worker, /workers\.dev/);
+});
+
+test("fills only empty meanings for the matching library fingerprint", () => {
+  const library = {
+    datasetFingerprint: "fingerprint-v1",
+    words: [
+      { id: 1, word: "doodle", meaning: "暂无释义" },
+      { id: 2, word: "known", meaning: "已有释义" },
+      { id: 3, word: "untouched", meaning: "" },
+    ],
+  };
+  const patch = {
+    format: "wordloop-meaning-patch-v1",
+    datasetFingerprint: "fingerprint-v1",
+    entries: [
+      { id: 1, word: "doodle", meaning: "涂鸦" },
+      { id: 2, word: "known", meaning: "不应覆盖" },
+      { id: 3, word: "wrong-word", meaning: "不应错配" },
+    ],
+  };
+  const result = applyMeaningPatchToLibrary(library, patch);
+  assert.equal(result.changed, 1);
+  assert.equal(result.library.words[0].meaning, "涂鸦");
+  assert.equal(result.library.words[1].meaning, "已有释义");
+  assert.equal(result.library.words[2].meaning, "");
+});
+
+test("rejects a meaning patch for a different dataset", () => {
+  assert.throws(
+    () =>
+      applyMeaningPatchToLibrary(
+        { datasetFingerprint: "current", words: [{ id: 1, word: "doodle", meaning: "暂无释义" }] },
+        { format: "wordloop-meaning-patch-v1", datasetFingerprint: "other", entries: [] },
+      ),
+    /词库版本不一致/,
+  );
 });
 
 test("encrypts opaque progress and creates deterministic migration ids", async () => {
