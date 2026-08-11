@@ -12,6 +12,7 @@ import {
   deriveCredentials,
   encryptPayload,
   initializeMeta,
+  initialCloudRestoreNeeded,
   mergeDeletedWords,
   personalKeyFromInput,
   progressSignature,
@@ -53,6 +54,8 @@ test("loads the cloud sync layer before WordLoop", async () => {
   assert.match(sync, /installReadingPositionPersistence/);
   assert.match(sync, /installFullListPreloader/);
   assert.match(sync, /installShareableAddress/);
+  assert.match(sync, /reloadAfterInitialCloudRestore/);
+  assert.match(sync, /meta\.syncId = credentials\.syncId/);
   assert.match(sync, /navigator\.share/);
   assert.match(sync, /link\.hash = `key=\$\{personalKey\}`/);
   assert.doesNotMatch(sync, /renderIncomingProgressNotice|cloud-progress-notice|fast-scroll-control/);
@@ -89,6 +92,12 @@ test("detects local deletion and list changes for immediate handoff sync", () =>
     progressSignature({ deletedWords: ["coverage"], activeList: 1, showMeaning: true }),
     progressSignature({ deletedWords: ["coverage"], activeList: 2, showMeaning: true }),
   );
+});
+
+test("new devices reload once after receiving their first cloud deletion snapshot", () => {
+  assert.equal(initialCloudRestoreNeeded(false, new Set(), new Set(["coverage"])), true);
+  assert.equal(initialCloudRestoreNeeded(true, new Set(), new Set(["coverage"])), false);
+  assert.equal(initialCloudRestoreNeeded(false, new Set(["coverage"]), new Set(["coverage", "stir"])), false);
 });
 
 test("converts an iPhone remaining-word backup into authoritative deletions", () => {

@@ -274,6 +274,10 @@ function sameWords(first, second) {
   return true;
 }
 
+function initialCloudRestoreNeeded(hasSyncedOnce, currentWords, mergedWords) {
+  return !hasSyncedOnce && currentWords.size === 0 && mergedWords.size > 0;
+}
+
 function deletedWordsFromRemaining(libraryWords, remainingWords) {
   const allWords = [
     ...new Set((Array.isArray(libraryWords) ? libraryWords : []).map((item) => normalizeWord(item?.word ?? item)).filter(Boolean)),
@@ -953,12 +957,16 @@ async function runSync(forceLeadership = false) {
       return "waiting";
     }
 
+    const credentials = await deriveCredentials(personalKey);
+    const compatibleSavedMeta =
+      savedMeta?.syncId && savedMeta.syncId !== credentials.syncId ? null : savedMeta;
     let progress = initialProgress;
-    let meta = observeLocalChanges(progress, await initializeMeta(progress, savedMeta));
+    let meta = observeLocalChanges(progress, await initializeMeta(progress, compatibleSavedMeta));
+    meta.syncId = credentials.syncId;
+    const hasSyncedOnceAtStart = Boolean(meta.hasSyncedOnce);
     meta = await ensureMonotonicSnapshot(progress, meta);
     await writeLocalEntries([[SYNC_META_KEY, meta]]);
     setStatus("syncing");
-    const credentials = await deriveCredentials(personalKey);
     deviceGroupCode = credentials.syncId.slice(0, 6).toUpperCase();
     let cursor = Math.max(0, Number(meta.cursor) || 0);
     const remoteOperations = [];
@@ -1014,6 +1022,11 @@ async function runSync(forceLeadership = false) {
     ]);
     const mergedWords = mergeDeletedWords(currentWords, protectedDeletedWords, remoteOperations, meta.pending);
     const wordsChanged = !sameWords(currentWords, mergedWords);
+    const reloadAfterInitialCloudRestore = initialCloudRestoreNeeded(
+      hasSyncedOnceAtStart,
+      currentWords,
+      mergedWords,
+    );
 
     if (sentUi) meta.uiDirty = false;
     if (!meta.uiDirty && latestUiState && Number(latestUiState.revision) > Number(meta.uiRevision || 0)) {
@@ -1047,6 +1060,9 @@ async function runSync(forceLeadership = false) {
     syncedDeletedCount = mergedWords.size;
     setStatus("synced");
     schedule(nextSyncDelay());
+    if (reloadAfterInitialCloudRestore) {
+      window.setTimeout(() => location.reload(), 120);
+    }
     return "synced";
   } catch (error) {
     failureCount += 1;
@@ -1248,6 +1264,7 @@ export {
   encryptPayload,
   importOldProgress,
   initializeMeta,
+  initialCloudRestoreNeeded,
   mergeDeletedWords,
   nextSyncDelay,
   normalizeWord,
