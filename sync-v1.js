@@ -361,7 +361,7 @@ async function currentPersonalKey() {
   return keyFromFragment() || (await readLocal(PERSONAL_KEY));
 }
 
-async function copySyncLink() {
+async function shareSyncLink() {
   const personalKey = await currentPersonalKey();
   if (!personalKey) {
     await connectCloudSync();
@@ -369,12 +369,44 @@ async function copySyncLink() {
   }
   const link = new URL(location.href);
   link.hash = `key=${personalKey}`;
+  if (navigator.share) {
+    try {
+      await navigator.share({
+        title: "WordLoop三端同步",
+        text: "在iPad或Mac打开一次即可自动载入词库和同步进度，无需导入JSON。",
+        url: link.toString(),
+      });
+      return;
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+    }
+  }
   try {
     await navigator.clipboard.writeText(link.toString());
-    window.alert("三端同步链接已复制。请在 iPhone、iPad 和 Mac 上分别打开这条链接一次。");
+    window.alert("三端同步链接已复制。请在iPad或Mac打开一次，无需导入JSON。");
   } catch {
     window.prompt("请复制下面的三端同步链接：", link.toString());
   }
+}
+
+async function keepShareableKeyInAddressBar() {
+  try {
+    const personalKey = await currentPersonalKey();
+    if (!personalKey || keyFromFragment() === personalKey) return;
+    const link = new URL(location.href);
+    link.hash = `key=${personalKey}`;
+    window.history.replaceState(null, "", link);
+  } catch {
+    // The app still works locally if the address cannot be updated.
+  }
+}
+
+function installShareableAddress() {
+  for (const delay of [0, 600, 1800, 5000, 12000]) {
+    window.setTimeout(() => void keepShareableKeyInAddressBar(), delay);
+  }
+  window.addEventListener("focus", () => void keepShareableKeyInAddressBar());
+  window.addEventListener("pageshow", () => void keepShareableKeyInAddressBar());
 }
 
 async function forceUploadLocalProgress() {
@@ -577,8 +609,8 @@ function renderCloudActions() {
     shareButton = document.createElement("button");
     shareButton.type = "button";
     shareButton.className = "copy-cloud-link";
-    shareButton.textContent = "复制三端同步链接";
-    shareButton.addEventListener("click", copySyncLink);
+    shareButton.textContent = "分享至iPad/Mac（无需导入）";
+    shareButton.addEventListener("click", shareSyncLink);
     const firstSecondaryButton = sheet.querySelector("button:not(.sheet-primary)");
     if (firstSecondaryButton) firstSecondaryButton.before(shareButton);
     else sheet.append(shareButton);
@@ -1127,123 +1159,36 @@ function installReadingPositionPersistence() {
   });
 }
 
-function installFastScrollControl() {
-  if (document.querySelector(".fast-scroll-control")) return;
-  const control = document.createElement("nav");
-  control.className = "fast-scroll-control";
-  control.dataset.ready = "false";
-  control.setAttribute("aria-label", "快速滚动单词列表");
-
-  const up = document.createElement("button");
-  up.type = "button";
-  up.className = "fast-scroll-arrow";
-  up.textContent = "▲";
-  up.setAttribute("aria-label", "长按快速向上滚动");
-
-  const track = document.createElement("div");
-  track.className = "fast-scroll-track";
-  const thumb = document.createElement("button");
-  thumb.type = "button";
-  thumb.className = "fast-scroll-thumb";
-  thumb.textContent = "↕";
-  thumb.setAttribute("aria-label", "拖动快速滚动");
-  track.append(thumb);
-
-  const down = document.createElement("button");
-  down.type = "button";
-  down.className = "fast-scroll-arrow";
-  down.textContent = "▼";
-  down.setAttribute("aria-label", "长按快速向下滚动");
-  control.append(up, track, down);
-  document.body.append(control);
-
-  const updateThumb = () => {
-    const rowsReady = Boolean(document.querySelector(".word-row"));
-    control.dataset.ready = String(rowsReady);
-    const maximum = Math.max(1, document.documentElement.scrollHeight - window.innerHeight);
-    const travel = Math.max(0, track.clientHeight - thumb.offsetHeight);
-    const top = Math.min(travel, Math.max(0, (window.scrollY / maximum) * travel));
-    thumb.style.transform = `translateY(${top}px)`;
-  };
-
-  let holdTimer = 0;
-  let frame = 0;
-  let holdStartedAt = 0;
-  let holdDirection = 0;
-  const stopHolding = (pageStep = false) => {
-    window.clearTimeout(holdTimer);
-    window.cancelAnimationFrame(frame);
-    if (pageStep && holdDirection) {
-      window.scrollBy({ top: holdDirection * window.innerHeight * 0.72, behavior: "smooth" });
-    }
-    holdDirection = 0;
-  };
-  const continuousStep = (now) => {
-    if (!holdDirection) return;
-    const heldFor = Math.max(0, now - holdStartedAt);
-    const pixels = Math.min(72, 12 + heldFor / 45);
-    window.scrollBy({ top: holdDirection * pixels, behavior: "auto" });
-    if (
-      holdDirection > 0 &&
-      document.documentElement.scrollHeight - window.scrollY - window.innerHeight < 900
-    ) {
+function installFullListPreloader() {
+  let loading = false;
+  let timer = 0;
+  const loadAll = () => {
+    if (loading) return;
+    loading = true;
+    const step = () => {
+      timer = 0;
       const loadMore = document.querySelector(".load-more");
-      if (loadMore instanceof HTMLButtonElement) loadMore.click();
-    }
-    frame = window.requestAnimationFrame(continuousStep);
+      if (!(loadMore instanceof HTMLButtonElement) || !loadMore.isConnected) {
+        loading = false;
+        return;
+      }
+      loadMore.click();
+      timer = window.setTimeout(step, 36);
+    };
+    step();
   };
-  const startHolding = (direction, event) => {
-    event.preventDefault();
-    stopHolding(false);
-    holdDirection = direction;
-    holdStartedAt = performance.now();
-    event.currentTarget.setPointerCapture?.(event.pointerId);
-    holdTimer = window.setTimeout(() => {
-      frame = window.requestAnimationFrame(continuousStep);
-    }, 220);
+  const schedule = () => {
+    if (loading || timer) return;
+    timer = window.setTimeout(() => {
+      timer = 0;
+      loadAll();
+    }, 20);
   };
-  for (const [button, direction] of [
-    [up, -1],
-    [down, 1],
-  ]) {
-    button.addEventListener("pointerdown", (event) => startHolding(direction, event));
-    button.addEventListener("pointerup", () => stopHolding(performance.now() - holdStartedAt < 220));
-    button.addEventListener("pointercancel", () => stopHolding(false));
-    button.addEventListener("contextmenu", (event) => event.preventDefault());
-  }
-
-  let dragging = false;
-  const dragTo = (event) => {
-    const bounds = track.getBoundingClientRect();
-    const travel = Math.max(1, bounds.height - thumb.offsetHeight);
-    const ratio = Math.min(1, Math.max(0, (event.clientY - bounds.top - thumb.offsetHeight / 2) / travel));
-    const maximum = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
-    window.scrollTo({ top: ratio * maximum, behavior: "auto" });
-  };
-  track.addEventListener("pointerdown", (event) => {
-    event.preventDefault();
-    dragging = true;
-    track.setPointerCapture?.(event.pointerId);
-    dragTo(event);
-  });
-  track.addEventListener("pointermove", (event) => {
-    if (dragging) dragTo(event);
-  });
-  track.addEventListener("pointerup", () => {
-    dragging = false;
-  });
-  track.addEventListener("pointercancel", () => {
-    dragging = false;
-  });
-  track.addEventListener("contextmenu", (event) => event.preventDefault());
-
-  window.addEventListener("scroll", updateThumb, { passive: true });
-  window.addEventListener("resize", updateThumb);
-  new MutationObserver(updateThumb).observe(document.getElementById("root") || document.body, {
+  new MutationObserver(schedule).observe(document.getElementById("root") || document.body, {
     childList: true,
     subtree: true,
   });
-  updateThumb();
+  schedule();
 }
 
 async function startBrowserApp() {
@@ -1259,7 +1204,8 @@ async function startBrowserApp() {
   scheduleMeaningPatchAfterApp();
   installExplicitRestoreBridge();
   installReadingPositionPersistence();
-  installFastScrollControl();
+  installFullListPreloader();
+  installShareableAddress();
   restoreReadingPosition();
   const observer = new MutationObserver(renderStatus);
   observer.observe(document.documentElement, { childList: true, subtree: true });

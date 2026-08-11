@@ -19,8 +19,8 @@
       .cloud-sync-indicator[data-state="waiting"] { color: #728078 !important; }
       .action-sheet > button.sync-cloud-now { background: #16734f !important; border-color: #16734f !important; color: #fff !important; font-weight: 800 !important; cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
       .action-sheet > button.sync-cloud-now:disabled { background: #729c89 !important; border-color: #729c89 !important; color: #fff !important; opacity: 1 !important; }
+      html, body { scroll-behavior: auto !important; }
       .word-row { content-visibility: auto; contain: layout paint style; contain-intrinsic-size: auto 210px; }
-      .fast-scroll-control { display: none; }
       .bottom-summary:has(.delete-side-toggle) { gap: 8px; padding-left: 14px; }
       .bottom-summary .delete-side-toggle { min-height: 48px; padding: 0 11px; border: 0; border-radius: 15px; background: #ffe9e9; color: #a82f2f; white-space: nowrap; font-size: 12px; font-weight: 850; touch-action: manipulation; }
       body.delete-side-left .word-row { grid-template-columns: 72px minmax(150px,.8fr) minmax(210px,1.5fr); padding-left: 16px; padding-right: 20px; }
@@ -33,14 +33,9 @@
         .bottom-summary .delete-side-toggle { padding: 0 8px; font-size: 11px; }
         .bottom-summary:has(.delete-side-toggle) > button:last-child { padding-left: 10px; padding-right: 10px; font-size: 12px; }
         body.delete-side-left .word-row { grid-template-columns: 62px minmax(0,.88fr) minmax(0,1.12fr); padding-left: 10px; padding-right: 14px; }
-        .fast-scroll-control { position: fixed; z-index: 50; top: 29vh; right: max(3px, env(safe-area-inset-right)); display: grid; grid-template-rows: 38px 148px 38px; width: 34px; padding: 3px; overflow: hidden; border: 1px solid rgba(255,255,255,.65); border-radius: 18px; background: rgba(18,44,36,.78); box-shadow: 0 8px 22px rgba(18,44,36,.22); backdrop-filter: blur(12px); transition: opacity .18s ease; touch-action: none; user-select: none; -webkit-user-select: none; }
-        .fast-scroll-control[data-ready="false"] { opacity: 0; pointer-events: none; }
-        .fast-scroll-arrow { width: 28px; height: 36px; padding: 0; border: 0; border-radius: 13px; background: rgba(255,255,255,.92); color: #12372b; font-size: 14px; font-weight: 900; touch-action: none; }
-        .fast-scroll-track { position: relative; width: 28px; height: 148px; border-radius: 14px; background: rgba(255,255,255,.18); touch-action: none; }
-        .fast-scroll-thumb { position: absolute; top: 0; left: 1px; width: 26px; height: 44px; padding: 0; border: 0; border-radius: 13px; background: #fff; color: #16734f; box-shadow: 0 3px 10px rgba(0,0,0,.18); font-size: 17px; font-weight: 900; touch-action: none; will-change: transform; }
       }
     </style>
-    <script type="module" src="./sync-v1.js?v=20260811-12"></script>
+    <script type="module" src="./sync-v1.js?v=20260811-13"></script>
     <link rel="stylesheet" crossorigin href="./assets/index-9xAbc2uX.css">
   </head>
   <body>

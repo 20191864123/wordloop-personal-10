@@ -38,7 +38,7 @@ test("loads the cloud sync layer before WordLoop", async () => {
   assert.match(sync, /导入iPhone备份并同步三端/);
   assert.match(sync, /authoritativeImportAt/);
   assert.match(sync, /renderProgressImporter\(\);\s+renderCloudConnector\(\);/);
-  assert.match(sync, /复制三端同步链接/);
+  assert.match(sync, /分享至iPad\/Mac（无需导入）/);
   assert.match(sync, /立即同步三台设备/);
   assert.match(sync, /正在同步…/);
   assert.match(sync, /同步完成 \u2713/);
@@ -51,9 +51,11 @@ test("loads the cloud sync layer before WordLoop", async () => {
   assert.match(sync, /restoreReadingPosition/);
   assert.match(sync, /wordloop-reading-position-persistent-v1/);
   assert.match(sync, /installReadingPositionPersistence/);
-  assert.match(sync, /installFastScrollControl/);
-  assert.match(sync, /长按快速向下滚动/);
-  assert.doesNotMatch(sync, /renderIncomingProgressNotice|cloud-progress-notice/);
+  assert.match(sync, /installFullListPreloader/);
+  assert.match(sync, /installShareableAddress/);
+  assert.match(sync, /navigator\.share/);
+  assert.match(sync, /link\.hash = `key=\$\{personalKey\}`/);
+  assert.doesNotMatch(sync, /renderIncomingProgressNotice|cloud-progress-notice|fast-scroll-control/);
   assert.doesNotMatch(sync, /wordsChanged[^\n]*location\.reload/);
   assert.match(sync, /wordloop-delete-side-v1/);
   assert.match(sync, /renderDeleteSideToggle/);
@@ -72,8 +74,8 @@ test("loads the cloud sync layer before WordLoop", async () => {
   assert.match(sync, /personal\/meanings-v1\.json/);
   assert.match(sync, /scheduleMeaningPatchAfterApp/);
   assert.doesNotMatch(sync, /Promise\.all\(\[applyCloudSnapshotBeforeApp\(\), applyMeaningPatchBeforeApp\(\)\]\)/);
-  assert.match(html, /fast-scroll-control/);
   assert.match(html, /content-visibility: auto/);
+  assert.doesNotMatch(html, /fast-scroll-control/);
   assert.match(sync, /datasetFingerprint/);
   assert.match(sync, /AES-GCM/);
 });
