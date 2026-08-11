@@ -10,7 +10,6 @@ const SYNC_POLICY_VERSION = 7;
 const MAX_BATCH = 100;
 const MAX_SYNC_ROUNDS = 600;
 const SYNC_REQUEST_TIMEOUT = 20000;
-const CATCH_UP_RELOAD_MINIMUM = 25;
 const FOREGROUND_SYNC_DELAY = 5000;
 const BACKGROUND_SYNC_DELAY = 60000;
 const LOCAL_WATCH_DELAY = 750;
@@ -401,9 +400,20 @@ function sameWords(first, second) {
   return true;
 }
 
-function cloudHydrationReloadNeeded(currentWords, mergedWords) {
-  const addedDeletionCount = Math.max(0, mergedWords.size - currentWords.size);
-  return addedDeletionCount > 0 && (currentWords.size === 0 || addedDeletionCount >= CATCH_UP_RELOAD_MINIMUM);
+function publishLiveDeletedWords(mergedWords) {
+  captureReadingPosition();
+  window.dispatchEvent(
+    new CustomEvent("wordloop-live-progress", {
+      detail: { deletedWords: [...mergedWords].sort() },
+    }),
+  );
+  window.setTimeout(restoreReadingPosition, 180);
+}
+
+function mergeLiveDeletedWords(currentWords, incomingWords) {
+  return new Set(
+    [...currentWords, ...incomingWords].map(normalizeWord).filter(Boolean),
+  );
 }
 
 function deletedWordsFromRemaining(libraryWords, remainingWords) {
@@ -1157,7 +1167,6 @@ async function runSync(forceLeadership = false) {
     ]);
     const mergedWords = mergeDeletedWords(currentWords, protectedDeletedWords, remoteOperations, meta.pending);
     const wordsChanged = !sameWords(currentWords, mergedWords);
-    const reloadAfterCloudHydration = cloudHydrationReloadNeeded(currentWords, mergedWords);
 
     if (sentUi) meta.uiDirty = false;
     if (!meta.uiDirty && latestUiState && Number(latestUiState.revision) > Number(meta.uiRevision || 0)) {
@@ -1191,9 +1200,7 @@ async function runSync(forceLeadership = false) {
     syncedDeletedCount = mergedWords.size;
     setStatus("synced");
     schedule(nextSyncDelay());
-    if (reloadAfterCloudHydration) {
-      window.setTimeout(reloadPreservingReadingPosition, 120);
-    }
+    if (wordsChanged) publishLiveDeletedWords(mergedWords);
     return "synced";
   } catch (error) {
     failureCount += 1;
@@ -1350,7 +1357,7 @@ async function startBrowserApp() {
   } catch (error) {
     console.info("WordLoop启动前进度恢复失败，将继续使用本机数据。", error instanceof Error ? error.message : error);
   }
-  await import("./assets/index-DiX3UPkj.js");
+  await import("./assets/index-DiX3UPkj.js?v=20260811-18");
   // Meaning updates run only after the app is usable, so a slow connection can
   // never leave the user stuck on “正在核对并更新词库”.
   scheduleMeaningPatchAfterApp();
@@ -1400,7 +1407,7 @@ export {
   encryptPayload,
   importOldProgress,
   initializeMeta,
-  cloudHydrationReloadNeeded,
+  mergeLiveDeletedWords,
   mergeDeletedWords,
   nextSyncDelay,
   normalizeWord,

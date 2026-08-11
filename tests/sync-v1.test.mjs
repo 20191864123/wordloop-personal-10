@@ -12,7 +12,7 @@ import {
   deriveCredentials,
   encryptPayload,
   initializeMeta,
-  cloudHydrationReloadNeeded,
+  mergeLiveDeletedWords,
   mergeDeletedWords,
   personalKeyFromInput,
   progressSignature,
@@ -22,13 +22,14 @@ import {
 const root = new URL("../", import.meta.url);
 
 test("loads the cloud sync layer before WordLoop", async () => {
-  const [html, sync] = await Promise.all([
+  const [html, sync, app] = await Promise.all([
     readFile(new URL("index.html", root), "utf8"),
     readFile(new URL("sync-v1.js", root), "utf8"),
+    readFile(new URL("assets/index-DiX3UPkj.js", root), "utf8"),
   ]);
   assert.match(html, /sync-v1\.js/);
   assert.doesNotMatch(html, /<script[^>]+index-DiX3UPkj\.js/);
-  assert.match(sync, /import\("\.\/assets\/index-DiX3UPkj\.js"\)/);
+  assert.match(sync, /import\("\.\/assets\/index-DiX3UPkj\.js\?v=20260811-18"\)/);
   assert.match(sync, /wordloop-personal-v6/);
   assert.match(sync, /cloud-sync-v1/);
   assert.match(sync, /migration_/);
@@ -55,7 +56,11 @@ test("loads the cloud sync layer before WordLoop", async () => {
   assert.match(sync, /installReadingPositionPersistence/);
   assert.match(sync, /installFullListPreloader/);
   assert.match(sync, /installShareableAddress/);
-  assert.match(sync, /reloadAfterCloudHydration/);
+  assert.match(sync, /publishLiveDeletedWords/);
+  assert.match(sync, /wordloop-live-progress/);
+  assert.match(app, /wordloop-live-progress/);
+  assert.match(app, /new Set\(\[\.\.\.e,\.\.\.t\.deletedWords\.map\(ie\)\]\)/);
+  assert.match(app, /t\(c\),r\(e=>new Set\(\[\.\.\.e,\.\.\.m\]\)\),a\(/);
   assert.match(sync, /meta\.syncId = credentials\.syncId/);
   assert.match(sync, /navigator\.share/);
   assert.match(sync, /link\.hash = `key=\$\{personalKey\}`/);
@@ -72,13 +77,13 @@ test("loads the cloud sync layer before WordLoop", async () => {
   assert.match(sync, /MAX_BATCH = 100/);
   assert.match(sync, /MAX_SYNC_ROUNDS = 600/);
   assert.match(sync, /SYNC_REQUEST_TIMEOUT = 20000/);
-  assert.match(sync, /CATCH_UP_RELOAD_MINIMUM = 25/);
   assert.match(sync, /repairPrunedLibraryBeforeApp/);
   assert.match(sync, /PERSONAL_MANIFEST_URL/);
   assert.match(sync, /ensureMonotonicSnapshot/);
   assert.match(sync, /installExplicitRestoreBridge/);
   assert.match(sync, /SYNC_LEADER_LEASE/);
   assert.doesNotMatch(sync, /wordsChanged[^\n]*reloadPreservingReadingPosition/);
+  assert.doesNotMatch(sync, /reloadAfterCloudHydration/);
   assert.match(sync, /设备组/);
   assert.match(sync, /serviceWorker\.register\("\.\/sw\.js"\)/);
   assert.match(sync, /personal\/meanings-v1\.json/);
@@ -101,12 +106,12 @@ test("detects local deletion and list changes for immediate handoff sync", () =>
   );
 });
 
-test("an empty device reloads after hydrating cloud deletions even with a stale cursor history", () => {
-  assert.equal(cloudHydrationReloadNeeded(new Set(), new Set(["coverage"])), true);
-  assert.equal(cloudHydrationReloadNeeded(new Set(["coverage"]), new Set(["coverage", "stir"])), false);
-  const current = new Set(Array.from({ length: 10 }, (_, index) => `current-${index}`));
-  const caughtUp = new Set([...current, ...Array.from({ length: 25 }, (_, index) => `remote-${index}`)]);
-  assert.equal(cloudHydrationReloadNeeded(current, caughtUp), true);
+test("live progress merges remote deletes without dropping a concurrent local delete", () => {
+  const merged = mergeLiveDeletedWords(
+    new Set(["local-delete", "coverage"]),
+    new Set(["remote-delete", "coverage"]),
+  );
+  assert.deepEqual([...merged], ["local-delete", "coverage", "remote-delete"]);
 });
 
 test("converts an iPhone remaining-word backup into authoritative deletions", () => {
